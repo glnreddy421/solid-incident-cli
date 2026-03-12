@@ -16,7 +16,6 @@ A CLI for SRE, DevOps, and platform engineers. Analyze log files or live streams
 - **Signals / anomalies** — Repeated failures, timeouts, CrashLoop, scale-to-zero, etc.
 - **Impacted services** — Inferred from log content
 - **Suggested next steps** — Concrete follow-up actions
-- **Optional backend** — Set `SOLID_API_URL` for AI-powered analysis and web workspace handoff
 
 ---
 
@@ -90,7 +89,6 @@ cat logs.txt | solid analyze --report json
 | `--timeline-only`| Print only timeline section                      |
 | `--no-color`     | Disable color                                    |
 | `--verbose`      | Include raw event details                        |
-| `--open-web`     | Open analysis in web workspace (requires `SOLID_API_URL`) |
 | `--since <dur>`  | Only lines from last N (e.g. `5m`, `1h`, `30s`)  |
 | `--from <time>`  | Start of time window (ISO or HH:MM)              |
 | `--to <time>`    | End of time window (ISO or HH:MM)                |
@@ -117,7 +115,6 @@ kubectl logs -f payment-service | solid stream
 | `--threshold <n>` | Repeated pattern threshold           | 3       |
 | `--json`          | Emit JSON events                     | —       |
 | `--quiet`         | Only print warnings/signals          | —       |
-| `--open-web`      | On Ctrl+C: send buffer to API and open web (requires `SOLID_API_URL`) | — |
 
 ---
 
@@ -141,21 +138,6 @@ solid report logs.txt --json --output report.json
 | `--output <file>`| Output path                    | `incident-report.md`|
 | `--title <title>`| Report title                   | Incident Report     |
 | `--json`         | Generate JSON instead of MD    | —                   |
-
----
-
-## Environment Variables
-
-| Variable         | Description                                      |
-|------------------|--------------------------------------------------|
-| `SOLID_API_URL`  | Backend API base URL for `--open-web` and AI analysis. When set, the CLI calls the backend instead of local mock. |
-
-Example:
-
-```bash
-export SOLID_API_URL=https://your-solid-api.example.com
-solid analyze logs.txt --open-web
-```
 
 ---
 
@@ -216,7 +198,7 @@ npm test            # Run tests
 
 ## Privacy
 
-Logs are processed **ephemerally** by default. No data is sent to a server unless you set `SOLID_API_URL` and use `--open-web`. Nothing is stored to disk except reports you explicitly generate with `solid report --output <file>`.
+Logs are processed **ephemerally** locally. Nothing is sent to any server. Nothing is stored to disk except reports you explicitly generate with `solid report --output <file>`.
 
 ---
 

@@ -24,9 +24,8 @@ program
   .addHelpText("after", `
 Examples:
   solid analyze logs.txt
-  solid analyze logs.txt --open-web
   solid analyze api.log worker.log redis.log db.log
-  kubectl logs pod | solid analyze --open-web
+  kubectl logs pod | solid analyze
   solid analyze ./samples/payment.log
   kubectl logs -f payment-service | solid stream
   solid analyze logs.txt --report
