@@ -1,0 +1,42 @@
+{
+  "name": "solid-incident-cli",
+  "version": "0.1.0",
+  "description": "SOLID CLI — Turn messy logs into incident timelines",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "solid": "./dist/index.js",
+    "solid-incident-cli": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "run": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "keywords": ["logs", "incident", "analysis", "cli", "sre", "devops"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/glnreddy421/solid-incident-cli.git"
+  },
+  "homepage": "https://github.com/glnreddy421/solid-incident-cli#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "ora": "^8.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.6"
+  }
+}

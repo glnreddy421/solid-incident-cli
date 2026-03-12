@@ -1,0 +1,7 @@
+2024-03-08T14:00:55.000Z kube-proxy Connection refused to 10.0.1.15:8080 (order-service pod)
+2024-03-08T14:00:55.100Z kubelet {"level":"info","msg":"killing container","pod":"order-service-abc123","namespace":"default","reason":"OOMKilled"}
+2024-03-08T14:00:55.200Z kubelet Back-off restarting failed container order-service in pod order-service-abc123
+2024-03-08T14:00:56.000Z endpoint-controller {"level":"warn","msg":"endpoints default/order-service not found","service":"order-service"}
+2024-03-08T14:00:57.000Z kube-dns {"level":"error","msg":"no endpoints for service order-service.default.svc.cluster.local"}
+2024-03-08T14:00:58.000Z order-service {"level":"error","msg":"failed to connect to payment-service","service":"order-service","error":"dial tcp: lookup payment-service: no such host"}
+2024-03-08T14:00:59.000Z kubelet {"level":"info","msg":"pod order-service-abc123 Pending","reason":"Unschedulable","message":"0/3 nodes available: insufficient memory"}

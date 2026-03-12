@@ -1,0 +1,7 @@
+2024-03-08T14:01:00.000Z 10.0.0.1 - - [08/Mar/2024:14:01:00 +0000] "GET /api/orders HTTP/1.1" 502 157 "-" "Mozilla/5.0"
+2024-03-08T14:01:00.001Z nginx-ingress upstream timed out (110: Connection timed out) while connecting to upstream, client: 10.0.0.1, server: app.example.com, request: "GET /api/orders HTTP/1.1", upstream: "http://10.0.1.15:8080/api/orders", host: "app.example.com"
+2024-03-08T14:01:01.100Z nginx-ingress [error] 502 Bad Gateway while proxying to upstream
+2024-03-08T14:01:02.000Z 10.0.0.2 - - [08/Mar/2024:14:01:02 +0000] "POST /api/payments HTTP/1.1" 502 157 "-" "curl/7.68"
+2024-03-08T14:01:02.001Z nginx-ingress upstream prematurely closed connection while reading response header from upstream, client: 10.0.0.2, server: app.example.com, upstream: "http://10.0.1.15:8080/api/payments"
+2024-03-08T14:01:03.000Z app-gateway {"level":"error","msg":"no healthy upstream","service":"app-gateway","upstream":"order-service"}
+2024-03-08T14:01:03.500Z app-gateway {"level":"warn","msg":"connection refused to order-service:8080","service":"app-gateway"}
