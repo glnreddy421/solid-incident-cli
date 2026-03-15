@@ -2,7 +2,7 @@
  * CLI constants and default values.
  */
 
-export const CLI_NAME = "solid";
+export const CLI_NAME = "solidx";
 export const CLI_DESCRIPTION = "Turn messy logs into incident timelines.";
 export const VERSION = "0.1.0";
 

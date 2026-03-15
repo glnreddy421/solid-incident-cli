@@ -17,8 +17,10 @@ export interface HandoffInfo {
   webUrl: string;
 }
 
+const DEFAULT_API_URL = "https://solid-gateway-1ke3a9fi.uc.gateway.dev";
+
 function getBaseUrl(): string | undefined {
-  return process.env.SOLID_API_URL;
+  return process.env.SOLID_API_URL ?? DEFAULT_API_URL;
 }
 
 interface BackendAnalyzeResponse {
@@ -147,5 +149,5 @@ export async function analyzeLogsViaBackend(
 }
 
 export function isBackendConfigured(): boolean {
-  return !!getBaseUrl();
+  return true; // Always use backend (gateway URL is default)
 }
