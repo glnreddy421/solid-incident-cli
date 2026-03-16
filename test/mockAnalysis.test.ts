@@ -24,7 +24,7 @@ describe("runMockAnalysis", () => {
       { line: "2024-03-08T14:02:15Z Back-off restarting failed container payment-service in pod payment-service-xyz", lineNumber: 1 },
     ];
     const result = runMockAnalysis(raw);
-    expect(result.signals.some((s) => s.label.toLowerCase().includes("crashloop"))).toBe(true);
+    expect(result.signals.some((s) => s.label.toLowerCase().includes("restart"))).toBe(true);
   });
 
   it("detects timeout pattern", () => {
@@ -41,7 +41,7 @@ describe("runMockAnalysis", () => {
       { line: "2024-03-08T14:02:00Z connection pool exhausted", lineNumber: 1 },
     ];
     const result = runMockAnalysis(raw);
-    expect(result.signals.some((s) => s.label.toLowerCase().includes("pool"))).toBe(true);
+    expect(result.signals.some((s) => s.label.toLowerCase().includes("dependency_failure_chain"))).toBe(true);
   });
 
   it("produces summary with impacted services", () => {

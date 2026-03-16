@@ -1,14 +1,20 @@
+import { resolve } from "path";
 import { writeFile } from "fs/promises";
 import { Command, Help } from "commander";
 import { BackendAiClient } from "../api/backendClient.js";
+import type { InputSource, RawLogLine } from "../contracts/index.js";
 import type { AnalyzeFlags, AnalysisResult, AppMode, ReportType, SessionRecord } from "../contracts/index.js";
 import { BackendUnavailableError, InputError, SolidError, TuiInitError } from "../contracts/index.js";
 import { analyzeLocally } from "../engine/analysisEngine.js";
+import { deriveAssessment } from "../engine/incidentAssessment.js";
 import { renderByMode, renderError } from "../output/renderers.js";
 import { deleteSession, getSession, listSessions, saveSession } from "../storage/sessionStore.js";
 import { loadConfig, setConfigKey } from "../storage/configStore.js";
 import { runTui, runWelcome } from "../tui/renderer.js";
 import { runWithAnalyzingAnimation } from "../tui/analyzingAnimation.js";
+import { serveAnalysis } from "../web/server.js";
+import { LiveIngestionMultiplexer } from "../core/live/liveIngestionMultiplexer.js";
+import type { SourceDescriptor } from "../core/live/types.js";
 import { loadInput } from "./input.js";
 import { decideMode, detectTerminalCapabilities } from "./mode.js";
 import { getCompletionScript } from "./completion.js";
@@ -18,9 +24,13 @@ interface AnalyzeOptions extends AnalyzeFlags {
   output?: string;
   inspect?: boolean;
   interval?: number;
+  live?: boolean;
   hideHeader?: boolean;
   skipSplash?: boolean;
   logLevel?: "error" | "warn" | "info" | "debug";
+  web?: boolean;
+  port?: number;
+  open?: boolean;
 }
 
 function addAnalyzeOptions(command: Command): Command {
@@ -30,6 +40,7 @@ function addAnalyzeOptions(command: Command): Command {
     .option("--text", "Render plain text output (script/CI safe)")
     .option("--md", "Render Markdown incident report")
     .option("--html", "Render HTML report")
+    .option("--live", "Tail file(s) and update TUI as new logs arrive")
     .option("--inspect", "Run in inspect (read-only investigation) mode")
     .option("--interval <seconds>", "Set TUI poll/refresh interval in seconds", (v) => Number.parseFloat(v || "2"))
     .option("--hide-header", "Hide the top header strip in TUI")
@@ -42,7 +53,10 @@ function addAnalyzeOptions(command: Command): Command {
     .option("--finalize", "Mark generated session/report as finalized")
     .option("--report", "Generate incident report from structured schema")
     .option("--rca", "Generate root-cause analysis report")
-    .option("--interview-story", "Generate interview-style STAR story");
+    .option("--interview-story", "Generate interview-style STAR story")
+    .option("--web", "Hand off analysis to web UI on local port")
+    .option("--port <number>", "Port for web UI (default: 3456)", (v) => parseInt(v || "3456", 10))
+    .option("--no-open", "Do not open browser when starting web UI");
 }
 
 async function maybeGenerateReports(result: AnalysisResult, client: BackendAiClient, options: AnalyzeOptions): Promise<void> {
@@ -97,16 +111,29 @@ async function renderAndPrint(result: AnalysisResult, mode: AppMode): Promise<vo
 }
 
 function fromSession(session: SessionRecord, mode: AppMode): AnalysisResult {
+  const schema = session.schemaSnapshot as AnalysisResult["schema"];
+  const traceGraph = schema.traceGraph ?? {
+    nodes: schema.summary.affectedServices ?? [],
+    edges: schema.flow.map((e) => ({ from: e.from, to: e.to, annotation: "impact", count: e.count, confidence: e.confidence })),
+    triggerCandidates: [],
+  };
+  const assessment = schema.assessment ?? deriveAssessment({
+    timeline: schema.timeline,
+    traceGraph,
+    signals: schema.signals,
+  });
   return {
     mode,
     inputSources: session.inputSources,
-    summary: session.schemaSnapshot.summary,
-    timeline: session.schemaSnapshot.timeline,
-    flow: session.schemaSnapshot.flow,
-    rawEvents: session.schemaSnapshot.timeline,
-    signals: session.schemaSnapshot.signals,
+    summary: schema.summary,
+    assessment,
+    timeline: schema.timeline,
+    flow: schema.flow,
+    traceGraph,
+    rawEvents: schema.timeline,
+    signals: schema.signals,
     ai: session.backendResponse,
-    schema: session.schemaSnapshot,
+    schema: { ...schema, traceGraph, assessment },
     diagnostics: {
       warnings: session.warnings,
       errors: [],
@@ -121,23 +148,50 @@ function fromSession(session: SessionRecord, mode: AppMode): AnalysisResult {
 
 export async function runTuiWithFallback(
   result: AnalysisResult,
-  runtime?: Pick<AnalyzeOptions, "inspect" | "interval" | "hideHeader" | "skipSplash" | "logLevel">
+  runtime?: Pick<AnalyzeOptions, "inspect" | "interval" | "hideHeader" | "skipSplash" | "logLevel">,
+  liveUpdate?: import("../tui/renderer.js").LiveUpdateConfig,
+  options?: Pick<AnalyzeOptions, "noAi">
 ): Promise<{ fellBack: boolean; fallbackText?: string }> {
+  const client = new BackendAiClient();
+  const useAi = !options?.noAi && client.isConfigured();
+
   try {
     await runTui(result, {
-      onGenerateIncidentReport: async () => {},
-      onGenerateRcaReport: async () => {},
-      onGenerateInterviewStory: async () => {},
-      onRefreshAi: async () => {},
-      onExport: async () => {},
-      onSave: async () => {},
+      onGenerateIncidentReport: async (r) => {
+        if (!useAi) return;
+        const body = await client.generateReport(r.schema, "incident");
+        r.ai.reports.incident = { type: "incident", title: "Incident Report", body, generatedAt: new Date().toISOString() };
+      },
+      onGenerateRcaReport: async (r) => {
+        if (!useAi) return;
+        const body = await client.generateReport(r.schema, "rca");
+        r.ai.reports.rca = { type: "rca", title: "RCA Report", body, generatedAt: new Date().toISOString() };
+      },
+      onGenerateInterviewStory: async (r) => {
+        if (!useAi) return;
+        const body = await client.generateReport(r.schema, "interview-story");
+        r.ai.reports["interview-story"] = { type: "interview-story", title: "Interview STAR Story", body, generatedAt: new Date().toISOString() };
+      },
+      onGenerateTechnicalTimeline: async () => {},
+      onRefreshAi: async (r) => {
+        if (!useAi) return;
+        try {
+          const ai = await client.enrichIncident(r.schema);
+          r.ai = ai;
+        } catch (err) {
+          r.ai.available = false;
+          r.ai.warning = err instanceof BackendUnavailableError ? err.message : "Backend request failed.";
+        }
+      },
+      onExport: async (_r) => {},
+      onSave: async (_r) => {},
     }, {
       inspect: runtime?.inspect,
       intervalSeconds: runtime?.interval,
       hideHeader: runtime?.hideHeader,
       skipSplash: runtime?.skipSplash,
       logLevel: runtime?.logLevel,
-    });
+    }, liveUpdate);
     return { fellBack: false };
   } catch (error) {
     if (error instanceof TuiInitError) {
@@ -150,13 +204,93 @@ export async function runTuiWithFallback(
   }
 }
 
+async function runLiveAnalyze(files: string[], options: AnalyzeOptions): Promise<void> {
+  const rawLines: RawLogLine[] = [];
+  const sources: InputSource[] = files.map((f) => ({ kind: "file" as const, name: f }));
+
+  const multiplexer = new LiveIngestionMultiplexer({
+    fromStart: true,
+    pollIntervalMs: 250,
+    onWarning: (w) => process.stderr.write(`[solidx] ${w}\n`),
+  });
+  multiplexer.onResult((r) => {
+    rawLines.push({
+      line: r.line.line,
+      lineNumber: r.line.lineNumber,
+      source: "file",
+      sourceName: r.line.sourceName,
+    });
+  });
+
+  const fileSources: SourceDescriptor[] = files.map((f, i) => ({
+    sourceId: `file-${i}`,
+    sourceName: f,
+    sourcePath: resolve(f),
+    sourceType: "file" as const,
+  }));
+  await multiplexer.start(fileSources);
+
+  const intervalSeconds = options.interval ?? 2;
+  const getResult = (): AnalysisResult => {
+    if (rawLines.length === 0) {
+      throw new SolidError("EMPTY_INPUT", "No logs yet. Waiting for input…", { recoverable: true });
+    }
+    return analyzeLocally({
+      rawLines: [...rawLines],
+      inputSources: sources,
+      mode: "tui",
+    });
+  };
+
+  let initialResult: AnalysisResult;
+  try {
+    initialResult = getResult();
+  } catch {
+    initialResult = analyzeLocally({
+      rawLines: [{ line: "Waiting for logs…", lineNumber: 1, source: "file", sourceName: files[0] ?? "stdin" }],
+      inputSources: sources,
+      mode: "tui",
+    });
+  }
+
+  await runTuiWithFallback(
+    initialResult,
+    {
+      inspect: options.inspect ?? true,
+      interval: intervalSeconds,
+      hideHeader: options.hideHeader,
+      skipSplash: options.skipSplash ?? true,
+      logLevel: options.logLevel,
+    },
+    {
+      intervalSeconds,
+      getResult,
+      onQuit: () => multiplexer.stop(),
+    },
+    { noAi: options.noAi }
+  );
+}
+
 export async function runAnalyze(files: string[], options: AnalyzeOptions): Promise<void> {
   const caps = detectTerminalCapabilities();
-  const mode = decideMode(options, caps);
+  const mode = options.web ? "text" : decideMode(options, caps);
 
   let result: AnalysisResult;
 
-  if (mode === "tui" && caps.interactive) {
+  if (options.live && files.length > 0 && caps.interactive) {
+    await runLiveAnalyze(files, options);
+    return;
+  }
+
+  if (options.web) {
+    const input = await loadInput(files);
+    result = analyzeLocally({
+      rawLines: input.lines,
+      inputSources: input.sources,
+      mode: "text",
+    });
+    await maybeEnrichWithAi(result, options);
+  } else if (mode === "tui" && caps.interactive) {
     result = await runWithAnalyzingAnimation(
       async () => {
         const input = await loadInput(files);
@@ -185,6 +319,16 @@ export async function runAnalyze(files: string[], options: AnalyzeOptions): Prom
     result.diagnostics.warnings.push(`Saved session ${session.sessionId}`);
   }
 
+  if (options.web) {
+    const { port, url } = await serveAnalysis(result, {
+      port: options.port ?? 3456,
+      openBrowser: options.open !== false,
+    });
+    process.stdout.write(`\nWeb UI ready at ${url}\n`);
+    process.stdout.write(`Press Ctrl+C to stop the server.\n\n`);
+    return;
+  }
+
   if (mode === "tui") {
     await runTuiWithFallback(result, {
       inspect: options.inspect,
@@ -192,7 +336,7 @@ export async function runAnalyze(files: string[], options: AnalyzeOptions): Prom
       hideHeader: options.hideHeader,
       skipSplash: true,
       logLevel: options.logLevel,
-    });
+    }, undefined, { noAi: options.noAi });
     return;
   }
   await renderAndPrint(result, mode);

@@ -10,6 +10,7 @@ export interface RawLogLine {
   line: string;
   lineNumber: number;
   source?: "file" | "stdin";
+  sourceName?: string;
 }
 
 /** A parsed, normalized event derived from log lines */
@@ -17,10 +18,33 @@ export interface ParsedEvent {
   timestamp: string; // ISO or "unknown"
   service: string;
   component?: string;
+  level?: Severity;
   severity: Severity;
   message: string;
+  host?: string;
+  pid?: string;
+  namespace?: string;
+  pod?: string;
+  container?: string;
+  traceId?: string;
+  spanId?: string;
+  attributes?: Record<string, unknown>;
+  sourceFields?: Record<string, unknown>;
+  parserMeta?: Record<string, unknown>;
+  timestampSource?: string;
+  timezoneAssumed?: string;
+  timestampInferred?: boolean;
   raw?: string;
   lineNumber?: number;
+  parserId?: string;
+  parseConfidence?: number;
+  parseReasons?: string[];
+  parseWarnings?: string[];
+  candidateParsers?: Array<{
+    parserId: string;
+    confidence: number;
+    reasons?: string[];
+  }>;
 }
 
 /** A detected pattern or anomaly */

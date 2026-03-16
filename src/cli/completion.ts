@@ -28,6 +28,9 @@ const FLAGS = [
   "--report",
   "--rca",
   "--interview-story",
+  "--web",
+  "--port",
+  "--no-open",
   "--output",
 ];
 

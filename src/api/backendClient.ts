@@ -14,7 +14,7 @@ export class BackendAiClient {
 
   constructor(opts: BackendClientOptions = {}) {
     this.baseUrl = opts.baseUrl ?? process.env.SOLID_API_URL;
-    this.timeoutMs = opts.timeoutMs ?? 8000;
+    this.timeoutMs = opts.timeoutMs ?? 50000;
     this.apiKey = opts.apiKey ?? process.env.SOLID_API_KEY;
   }
 
@@ -75,8 +75,31 @@ export class BackendAiClient {
   }
 
   async generateReport(schema: IncidentSchema, type: ReportType): Promise<string> {
-    const ai = await this.enrichIncident(schema);
-    return ai.reports[type]?.body ?? "";
+    if (!this.baseUrl) throw new BackendUnavailableError("Backend URL is not configured. Set SOLID_API_URL.");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/api/incident/report`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        body: JSON.stringify({ schema, type }),
+      });
+      if (!response.ok) throw new BackendUnavailableError(`Backend returned ${response.status}.`);
+      const payload = (await response.json()) as { body?: string };
+      return payload.body ?? "";
+    } catch (error) {
+      if (error instanceof BackendUnavailableError) throw error;
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new BackendUnavailableError("Backend request timed out.", `timeoutMs=${this.timeoutMs}`, error);
+      }
+      throw new BackendUnavailableError("Backend report request failed.", undefined, error);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

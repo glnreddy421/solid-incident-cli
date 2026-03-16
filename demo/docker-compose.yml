@@ -1,0 +1,22 @@
+# Demo: 4 microservices with failure cascade for solidx log analysis
+# auth-service crashes after ~3s -> connection refused cascade -> solidx pins the issue
+
+services:
+  auth-service:
+    build: ./services/auth-service
+    ports: ["3001:3001"]
+
+  order-service:
+    build: ./services/order-service
+    depends_on: [auth-service]
+    ports: ["3002:3002"]
+
+  payment-service:
+    build: ./services/payment-service
+    depends_on: [auth-service]
+    ports: ["3003:3003"]
+
+  api-gateway:
+    build: ./services/api-gateway
+    depends_on: [auth-service, order-service, payment-service]
+    ports: ["3000:3000"]

@@ -34,8 +34,15 @@ kubectl logs pod | solidx analyze
 # Auto-detected TUI (interactive terminal)
 solidx analyze logs.txt
 
+# Live tail – TUI updates as new logs arrive
+solidx analyze --live app.log
+
 # k9s-like runtime options
 solidx analyze logs.txt --inspect --interval 2 --skip-splash --log-level info
+
+# Web UI mode (hand off to browser)
+solidx analyze logs.txt --web
+solidx analyze logs.txt --web --port 4000 --no-open
 
 # Non-TUI output modes
 solidx analyze logs.txt --json
@@ -55,6 +62,9 @@ solidx analyze logs.txt --text
 
 ## Analyze options
 
+- `--web` — Hand off analysis to web UI on local port (default: 3456)
+- `--port <number>` — Port for web UI
+- `--no-open` — Do not open browser when starting web UI
 - `--no-tui`
 - `--inspect`
 - `--interval <seconds>`
@@ -64,8 +74,24 @@ solidx analyze logs.txt --text
 - `--json` / `--text` / `--md` / `--html`
 - `--save`
 - `--session-name <name>`
-- `--no-ai`
-- `--report` / `--rca` / `--interview-story`
+- `--no-ai` — Skip AI analysis (use local analysis only)
+- `--report` / `--rca` / `--interview-story` — Generate reports on demand (requires backend)
+
+## AI analysis and reports
+
+When `SOLID_API_URL` is set, the CLI sends a compact schema (events, signals, graph) to the backend. The AI returns a brief analysis (summary, root-cause candidates, follow-up questions). Reports are generated on demand when you pass `--report`, `--rca`, or `--interview-story`.
+
+```bash
+# Start backend locally (Docker)
+cd backend-api   # in solid repo
+docker compose up
+
+# Analyze with AI
+SOLID_API_URL=http://localhost:9090 solidx analyze logs.txt
+
+# Generate reports on demand
+SOLID_API_URL=http://localhost:9090 solidx analyze logs.txt --report --rca
+```
 
 ## Development
 

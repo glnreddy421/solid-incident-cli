@@ -36,7 +36,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   if (refusals.length >= 2) {
     const service = refusals[0]?.service ?? "unknown";
     signals.push({
-      label: "Repeated dependency failure detected",
+      label: "repeated_connection_refused",
       description: `Connection refused pattern (${refusals.length}x). Service: ${service}`,
       severity: refusals.some((e) => e.severity === "critical") ? "critical" : "error",
       count: refusals.length,
@@ -47,7 +47,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const timeouts = events.filter((e) => PATTERNS.timeout.test(e.message));
   if (timeouts.length >= 2) {
     signals.push({
-      label: "Timeout / deadline exceeded",
+      label: "timeout_pattern",
       description: `Timeout or deadline exceeded (${timeouts.length}x)`,
       severity: "error",
       count: timeouts.length,
@@ -57,7 +57,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const crashloop = events.filter((e) => PATTERNS.crashloop.test(e.message));
   if (crashloop.length >= 1) {
     signals.push({
-      label: "CrashLoop pattern detected",
+      label: "restart_detected",
       description: "Container or process restart loop (CrashLoopBackOff / back-off)",
       severity: "critical",
       count: crashloop.length,
@@ -67,7 +67,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const scaled = events.filter((e) => PATTERNS.scaledToZero.test(e.message));
   if (scaled.length >= 1) {
     signals.push({
-      label: "Scale-to-zero or replica change",
+      label: "new_log_pattern",
       description: "Deployment/StatefulSet scaled to 0 or replica change",
       severity: "warning",
       count: scaled.length,
@@ -77,7 +77,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const podDel = events.filter((e) => PATTERNS.podDeleted.test(e.message));
   if (podDel.length >= 1) {
     signals.push({
-      label: "Pod deleted / lifecycle event",
+      label: "warning_burst",
       description: "Pod deleted or lifecycle event observed",
       severity: "warning",
       count: podDel.length,
@@ -87,7 +87,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const retries = events.filter((e) => PATTERNS.retry.test(e.message));
   if (retries.length >= 3) {
     signals.push({
-      label: "Repeated retries",
+      label: "warning_burst",
       description: `Retry attempts detected (${retries.length}x)`,
       severity: "warning",
       count: retries.length,
@@ -97,7 +97,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const throttl = events.filter((e) => PATTERNS.throttl.test(e.message));
   if (throttl.length >= 1) {
     signals.push({
-      label: "Throttling / rate limit",
+      label: "warning_burst",
       description: "Throttling or rate limit mentioned",
       severity: "warning",
       count: throttl.length,
@@ -107,7 +107,7 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const pool = events.filter((e) => PATTERNS.poolExhausted.test(e.message));
   if (pool.length >= 1) {
     signals.push({
-      label: "Connection pool exhausted",
+      label: "dependency_failure_chain",
       description: "DB or connection pool exhaustion",
       severity: "critical",
       count: pool.length,
@@ -117,24 +117,34 @@ function detectSignals(events: ParsedEvent[]): Signal[] {
   const auth = events.filter((e) => PATTERNS.authError.test(e.message));
   if (auth.length >= 1) {
     signals.push({
-      label: "Auth / token error",
+      label: "error_rate_spike",
       description: "Authentication or token failure",
       severity: "error",
       count: auth.length,
     });
   }
 
-  const services = new Set(events.map((e) => e.service).filter((s) => s !== "unknown-service"));
   if (signals.length === 0 && events.length > 0) {
-    signals.push({
-      label: "Log activity detected",
-      description: `${events.length} parsed event(s). No strong pattern match.`,
-      severity: "info",
-      count: events.length,
-    });
+    const hasWarningsOrErrors = events.some((e) => e.severity === "warning" || e.severity === "error" || e.severity === "critical");
+    signals.push({ label: "informational_log_cluster", description: `${events.length} informational events`, severity: "info", count: events.length });
+    if (!hasWarningsOrErrors) signals.push({ label: "no_error_patterns", severity: "info", count: 1, description: "No error signatures observed." });
+    signals.push({ label: "no_dependency_failures", severity: "info", count: 1, description: "No dependency failures detected." });
   }
 
-  return signals;
+  return dedupeByLabel(signals);
+}
+
+function dedupeByLabel(signals: Signal[]): Signal[] {
+  const byLabel = new Map<string, Signal>();
+  for (const sig of signals) {
+    const existing = byLabel.get(sig.label);
+    if (!existing) {
+      byLabel.set(sig.label, sig);
+      continue;
+    }
+    existing.count = (existing.count ?? 0) + (sig.count ?? 0);
+  }
+  return [...byLabel.values()];
 }
 
 function buildSummary(events: ParsedEvent[], signals: Signal[]): IncidentSummary {

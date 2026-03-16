@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execSync } from "child_process";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 const CLI_PATH = join(process.cwd(), "dist/index.js");
@@ -58,5 +59,31 @@ describe("CLI integration", () => {
       const e = err as { status: number };
       expect(e.status).toBe(1);
     }
+  });
+
+  it("solidx analyze capture.har --json produces valid JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "solid-cli-har-"));
+    const harPath = join(dir, "capture.har");
+    writeFileSync(
+      harPath,
+      JSON.stringify({
+        log: {
+          entries: [
+            {
+              startedDateTime: "2024-03-08T14:02:12Z",
+              time: 50,
+              request: { method: "GET", url: "https://api.example.com/health" },
+              response: { status: 200 },
+            },
+          ],
+        },
+      }),
+    );
+    const out = execSync(`node ${CLI_PATH} analyze ${harPath} --json --no-ai`, { encoding: "utf-8" });
+    const parsed = JSON.parse(out);
+    expect(parsed).toHaveProperty("summary");
+    expect(parsed).toHaveProperty("timeline");
+    expect(Array.isArray(parsed.timeline)).toBe(true);
+    expect(parsed.timeline.length).toBeGreaterThanOrEqual(1);
   });
 });

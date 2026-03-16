@@ -1,0 +1,107 @@
+Mar 14 01:04:01 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:04:31 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:05:01 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:05:31 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:06:01 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:06:31 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:07:01 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:07:31 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:08:01 MacBook-Pro syslogd[540]: ASL Sender Statistics
+Mar 14 01:08:31 MacBook-Pro syslogd[540]: ASL Sender Statistics
+2026-03-14T01:09:00Z postgres ERROR connection refused for user api
+2026-03-14T01:09:01Z worker WARN retrying job attempt 1/5 due to db connect error
+2026-03-14T01:09:02Z worker WARN retrying job attempt 2/5 due to db connect error
+2026-03-14T01:09:03Z worker WARN retrying job attempt 3/5 due to db connect error
+2026-03-14T01:09:04Z api-gateway ERROR timeout while waiting for auth-service
+2026-03-14T01:09:05Z api-gateway ERROR returned 502 upstream timeout
+2026-03-14T01:09:06Z ingress WARN latency p99=1800ms /v1/orders
+2026-03-14T01:09:07Z ingress WARN latency p99=1900ms /v1/orders
+2026-03-14T01:09:08Z auth-service ERROR deadline exceeded calling postgres
+2026-03-14T01:09:09Z auth-service WARN retrying token lookup attempt 1/3
+2026-03-14T01:09:10Z auth-service WARN retrying token lookup attempt 2/3
+2026-03-14T01:09:11Z auth-service ERROR token lookup failed after retries
+2026-03-14T01:09:12Z api-gateway ERROR 5xx spike observed 42 errors/min
+2026-03-14T01:09:13Z queue-worker WARN backoff 2s before retry
+2026-03-14T01:09:14Z queue-worker WARN backoff 4s before retry
+2026-03-14T01:09:15Z queue-worker WARN backoff 8s before retry
+2026-03-14T01:09:16Z queue-worker ERROR failed to connect postgres ECONNREFUSED
+2026-03-14T01:09:17Z db-proxy ERROR upstream database unavailable
+2026-03-14T01:09:18Z api-gateway ERROR request_id=req-001 timeout calling auth-service
+2026-03-14T01:09:19Z api-gateway ERROR request_id=req-002 timeout calling auth-service
+2026-03-14T01:09:20Z api-gateway ERROR request_id=req-003 timeout calling auth-service
+2026-03-14T01:09:21Z ingress WARN error rate increase 6.2%
+2026-03-14T01:09:22Z ingress WARN error rate increase 6.8%
+2026-03-14T01:09:23Z ingress WARN error rate increase 7.1%
+2026-03-14T01:09:24Z ingress ERROR saturation warning: upstream queue depth high
+2026-03-14T01:09:25Z node-agent CRITICAL memory pressure detected on host node-a
+2026-03-14T01:09:26Z node-agent CRITICAL oom-killer invoked for worker pid 8821
+2026-03-14T01:09:27Z worker ERROR process crashed and restarting
+2026-03-14T01:09:28Z worker WARN restart event detected count=1
+2026-03-14T01:09:29Z worker WARN restart event detected count=2
+2026-03-14T01:09:30Z worker WARN restart event detected count=3
+2026-03-14T01:09:31Z worker ERROR crashloop back-off restarting failed container
+2026-03-14T01:09:32Z api-gateway ERROR 503 service unavailable
+2026-03-14T01:09:33Z api-gateway ERROR 503 service unavailable
+2026-03-14T01:09:34Z api-gateway ERROR 503 service unavailable
+2026-03-14T01:09:35Z ingress ERROR repeated 5xx pattern above threshold
+2026-03-14T01:09:36Z pager INFO incident candidate raised by local engine
+2026-03-14T01:09:37Z pager INFO alert routed to oncall-sre
+2026-03-14T01:09:38Z pager INFO alert acknowledged by oncall-sre
+2026-03-14T01:09:39Z api-gateway WARN still degraded waiting for backend recovery
+2026-03-14T01:09:40Z auth-service WARN still degraded waiting for postgres recovery
+2026-03-14T01:09:41Z postgres INFO failover initiated to replica-2
+2026-03-14T01:09:42Z postgres INFO replica-2 promoted successfully
+2026-03-14T01:09:43Z db-proxy INFO upstream switched to replica-2
+2026-03-14T01:09:44Z auth-service INFO connection restored to postgres replica-2
+2026-03-14T01:09:45Z auth-service INFO retry queue draining
+2026-03-14T01:09:46Z api-gateway INFO timeout rate dropping to baseline
+2026-03-14T01:09:47Z ingress INFO p99 latency recovering 550ms
+2026-03-14T01:09:48Z ingress INFO p99 latency recovering 420ms
+2026-03-14T01:09:49Z ingress INFO p99 latency recovering 280ms
+2026-03-14T01:09:50Z api-gateway INFO 5xx rate normalized
+2026-03-14T01:09:51Z queue-worker INFO retries completed successfully
+2026-03-14T01:09:52Z worker INFO restart stabilized with healthy probes
+2026-03-14T01:09:53Z monitor INFO no_dependency_failures currently observed
+2026-03-14T01:09:54Z monitor INFO stable_service_behavior observed on critical path
+2026-03-14T01:09:55Z monitor INFO informational_log_cluster active
+2026-03-14T01:10:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:10:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:11:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:11:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:12:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:12:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:13:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:13:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:14:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:14:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:15:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:15:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:16:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:16:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:17:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:17:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:18:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:18:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:19:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:19:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:20:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:20:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:21:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:21:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:22:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:22:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:23:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:23:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:24:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:24:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:25:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:25:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:26:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:26:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:27:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:27:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:28:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:28:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:29:00Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:29:30Z monitor INFO heartbeat service=api-gateway
+2026-03-14T01:30:00Z monitor INFO heartbeat service=api-gateway
