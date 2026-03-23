@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type {
+  AnalysisContext,
   AnalysisResult,
   AppMode,
   FlowEdge,
@@ -237,6 +238,8 @@ export interface EngineAnalyzeInput {
   rawLines: RawLogLine[];
   inputSources: InputSource[];
   mode: AppMode;
+  /** Propagated into `result.metadata` for report state (live vs final wording). */
+  analysisContext?: AnalysisContext;
 }
 
 export function analyzeLocally(input: EngineAnalyzeInput): AnalysisResult {
@@ -387,6 +390,7 @@ export function analyzeLocally(input: EngineAnalyzeInput): AnalysisResult {
     metadata: {
       rawLineCount: input.rawLines.length,
       createdAt: new Date().toISOString(),
+      ...(input.analysisContext ? { analysisContext: input.analysisContext } : {}),
     },
     mlEnrichment,
   };
@@ -457,7 +461,7 @@ function formatTriggerLabel(trigger?: TimelineEntry): string {
 }
 
 function enrichSignalsWithMl(
-  signals: { label: string; description?: string; severity: Severity; count?: number; service?: string }[],
+  signals: Signal[],
   events: { message: string; service?: string }[],
   ml: { eventScores: number[]; available: boolean }
 ): Signal[] {

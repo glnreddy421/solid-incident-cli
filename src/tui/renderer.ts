@@ -1,16 +1,21 @@
 import readline from "readline";
 import type { AnalysisResult, TuiPanelId, TuiState } from "../contracts/index.js";
 import { TuiInitError } from "../contracts/index.js";
+import {
+  ENRICHMENT_STYLES_ORDER,
+  enrichmentStyleAtMenuIndex,
+  executeByoFollowUp,
+  type ByoEnrichOptions,
+} from "../enrich/applyByoToAnalysis.js";
+import { applyHeuristicReport } from "../reports/heuristicStructuredReports.js";
+import { aiHasUsableContent } from "../utils/enrich/aiPresentation.js";
 import { KEYMAP, PANEL_LABELS, PANEL_ORDER } from "./keymap.js";
+import type { TuiLayoutContext } from "./layoutContext.js";
 import { renderLayout } from "./layout.js";
 import { deriveLiveHealth, type LiveModeState } from "./liveMode.js";
 import { createTheme, paint, type TuiTheme } from "./theme.js";
 
 export interface TuiActions {
-  onGenerateIncidentReport: (result: AnalysisResult) => Promise<void>;
-  onGenerateRcaReport: (result: AnalysisResult) => Promise<void>;
-  onGenerateInterviewStory: (result: AnalysisResult) => Promise<void>;
-  onGenerateTechnicalTimeline?: (result: AnalysisResult) => Promise<void>;
   onRefreshAi: (result: AnalysisResult) => Promise<void>;
   onSave: (result: AnalysisResult) => Promise<void>;
   onExport: (result: AnalysisResult) => Promise<void>;
@@ -24,6 +29,15 @@ export interface TuiRuntimeOptions {
   hideHeader?: boolean;
   skipSplash?: boolean;
   logLevel?: "error" | "warn" | "info" | "debug";
+  /**
+   * Runs after the first paint (non-blocking). Use for backend AI enrich so the TUI opens immediately.
+   * Callers should redraw when the promise settles (handled inside runTui).
+   */
+  backgroundEnrich?: () => Promise<void>;
+  /** BYO `--provider` on analyze: enables n + digit explicit follow-up passes. */
+  byoFollowUpAvailable?: boolean;
+  /** Options passed to executeByoFollowUp (provider, url, model, …). */
+  byoEnrichOptions?: ByoEnrichOptions;
 }
 
 export interface LiveUpdateConfig {
@@ -337,15 +351,19 @@ function draw(result: AnalysisResult, state: TuiState, live: LiveModeState, runt
   const cols = process.stdout.columns ?? 120;
   process.stdout.write("\x1Bc");
   const liveStatus = live.enabled ? `${live.health}${live.paused ? " (paused)" : ""}` : "off";
-  const shell = renderLayout(result, state, live.enabled, liveStatus);
+  const layoutCtx: TuiLayoutContext = {
+    byoFollowUpAvailable: runtime.byoFollowUpAvailable ?? false,
+    followUpPickerOpen: Boolean(state.followUpPickerOpen),
+  };
+  const shell = renderLayout(result, state, live.enabled, liveStatus, layoutCtx);
   const tabs = PANEL_ORDER.map((panel, idx) => {
     const inactive = `[${idx + 1}] ${PANEL_LABELS[panel]}`;
     if (state.activePanel !== panel) return paint(theme, inactive, theme.muted);
     const active = `[${idx + 1}] ${PANEL_LABELS[panel]}`;
     return paint(theme, active, theme.panelActive, theme.bold);
   }).join(" ");
-  const topActions =
-    "Keys: 1-9 panels | Tab focus | j/k scroll | PgUp/PgDn | / search | f filter | g AI | r/c/i/T | e export | w save | q quit";
+  const followUpHint = runtime.byoFollowUpAvailable ? `n+1-${ENRICHMENT_STYLES_ORDER.length} follow-up` : "BYO: --provider for follow-ups";
+  const topActions = `Keys: 1-9 | Tab | j/k | / f | g | ${followUpHint} | R/I reports | e w x ? q`;
 
   const top0 = colorizeLiveStatus(theme, shell.topStrip[0], live);
   const top1 = shell.topStrip[1]
@@ -447,6 +465,7 @@ export async function runTui(
     sideScroll: 0,
     focusRegion: "main",
     warnings: [],
+    followUpPickerOpen: false,
   };
   const live: LiveModeState = {
     enabled: liveUpdate != null || result.inputSources.some((source) => source.kind === "stdin"),
@@ -481,10 +500,62 @@ export async function runTui(
   }
   draw(resultRef.current, state, live, runtime);
 
+  if (runtime.backgroundEnrich) {
+    void runtime
+      .backgroundEnrich()
+      .catch(() => {
+        /* errors are reflected on result.ai */
+      })
+      .finally(() => {
+        draw(resultRef.current, state, live, runtime);
+      });
+  }
+
   await new Promise<void>((resolve) => {
     const onKeypress = async (str: string, key: readline.Key) => {
       const readonlyMode = runtime.inspect === true;
       try {
+        if (state.followUpPickerOpen) {
+          if (key.name === "escape") {
+            state.followUpPickerOpen = false;
+            state.message = "Follow-up picker cancelled.";
+            draw(resultRef.current, state, live, runtime);
+            return;
+          }
+        }
+
+        if (state.followUpPickerOpen && str.length === 1 && /^\d$/.test(str)) {
+          const d = Number.parseInt(str, 10);
+          state.followUpPickerOpen = false;
+          if (d === 0) {
+            state.message = "Follow-up picker cancelled.";
+            draw(resultRef.current, state, live, runtime);
+            return;
+          }
+          if (d < 1 || d > ENRICHMENT_STYLES_ORDER.length) {
+            state.message = `Pick 1-${ENRICHMENT_STYLES_ORDER.length} or 0 to cancel.`;
+            draw(resultRef.current, state, live, runtime);
+            return;
+          }
+          const style = enrichmentStyleAtMenuIndex(d);
+          const opts = runtime.byoEnrichOptions;
+          if (!style || !opts) {
+            state.message = "Follow-up unavailable.";
+            draw(resultRef.current, state, live, runtime);
+            return;
+          }
+          state.message = `BYO follow-up (${style})…`;
+          draw(resultRef.current, state, live, runtime);
+          try {
+            await executeByoFollowUp(resultRef.current, opts, style);
+            state.message = `Follow-up saved: ${style}`;
+          } catch (e) {
+            state.message = e instanceof Error ? e.message : "Follow-up failed.";
+          }
+          draw(resultRef.current, state, live, runtime);
+          return;
+        }
+
         if (key.sequence === "\u0003" || str === "q") {
           process.stdin.off("keypress", onKeypress);
           if (liveInterval) clearInterval(liveInterval);
@@ -536,42 +607,56 @@ export async function runTui(
           if (focus === "main") state.mainScroll = Number.MAX_SAFE_INTEGER;
           else state.sideScroll = Number.MAX_SAFE_INTEGER;
         }
-        if (str === "r") {
+        if (str === "n") {
+          if (runtime.byoFollowUpAvailable && aiHasUsableContent(resultRef.current.ai)) {
+            state.followUpPickerOpen = true;
+            state.message = `Follow-up: 1-${ENRICHMENT_STYLES_ORDER.length}=style  0=cancel (AI panel)`;
+          } else if (!runtime.byoFollowUpAvailable) {
+            state.message = "BYO follow-ups: use analyze --provider … then n.";
+          } else {
+            state.message = "Wait for primary AI (panel 7), then press n.";
+          }
+          draw(resultRef.current, state, live, runtime);
+          return;
+        }
+
+        if (str === "R") {
           if (readonlyMode) {
             state.message = "Readonly mode: report generation is disabled.";
             draw(resultRef.current, state, live, runtime);
             return;
           }
-          await actions.onGenerateIncidentReport(resultRef.current);
-          state.message = "Incident report generated.";
+          applyHeuristicReport(resultRef.current, "rca");
+          state.activePanel = "reports";
+          state.mainScroll = 0;
+          state.sideScroll = 0;
+          const ac = resultRef.current.metadata.analysisContext;
+          const liveHint =
+            ac?.runKind === "live" && !ac.streamFinalized
+              ? " Provisional snapshot (live window) — not a final postmortem."
+              : ac?.runKind === "live" && ac.streamFinalized
+                ? " Stream finalized — report uses closed-analysis phrasing."
+                : "";
+          state.message = `Engine RCA snapshot saved (panel 8).${liveHint} STAR = I. No AI.`;
         }
-        if (str === "c") {
+        if (str === "I") {
           if (readonlyMode) {
             state.message = "Readonly mode: report generation is disabled.";
             draw(resultRef.current, state, live, runtime);
             return;
           }
-          await actions.onGenerateRcaReport(resultRef.current);
-          state.message = "RCA report generated.";
+          applyHeuristicReport(resultRef.current, "interview");
+          state.activePanel = "reports";
+          state.mainScroll = 0;
+          state.sideScroll = 0;
+          const ac = resultRef.current.metadata.analysisContext;
+          const liveHint =
+            ac?.runKind === "live" && !ac.streamFinalized
+              ? " Provisional snapshot (live window)."
+              : "";
+          state.message = `Engine STAR snapshot saved (panel 8).${liveHint} No AI.`;
         }
-        if (str === "i") {
-          if (readonlyMode) {
-            state.message = "Readonly mode: story generation is disabled.";
-            draw(resultRef.current, state, live, runtime);
-            return;
-          }
-          await actions.onGenerateInterviewStory(resultRef.current);
-          state.message = "Interview story generated.";
-        }
-        if (str === "T" && actions.onGenerateTechnicalTimeline) {
-          if (readonlyMode) {
-            state.message = "Readonly mode: timeline report generation is disabled.";
-            draw(resultRef.current, state, live, runtime);
-            return;
-          }
-          await actions.onGenerateTechnicalTimeline(resultRef.current);
-          state.message = "Technical timeline generated.";
-        }
+
         if (str === "w") {
           if (readonlyMode) {
             state.message = "Readonly mode: session save is disabled.";

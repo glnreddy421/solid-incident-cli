@@ -1,17 +1,38 @@
-import type { AnalysisResult, TuiPanelId } from "../contracts/index.js";
+import type { AiAnalysis, AnalysisResult, TuiPanelId } from "../contracts/index.js";
+import { ENRICHMENT_STYLES_ORDER } from "../enrich/applyByoToAnalysis.js";
+import {
+  METRIC_HINT_HEALTH_TUI,
+  METRIC_HINT_SERVICES_TUI,
+  METRIC_HINT_SUMMARY_CONFIDENCE_TUI,
+  METRIC_HINT_VERDICT_TUI,
+} from "../ui/metricHints.js";
+import {
+  aiHasUsableContent,
+  aiOrEngineTimelineNarrative,
+  aiPrimaryHeadline,
+  displayRecommendedLines,
+  displayRootCauseLines,
+} from "../utils/enrich/aiPresentation.js";
+import type { TuiLayoutContext } from "./layoutContext.js";
 
 export interface PanelSpec {
   id: TuiPanelId;
   title: string;
   description: string;
-  main: (result: AnalysisResult, filter: string, search: string) => string[];
-  side: (result: AnalysisResult, filter: string, search: string) => string[];
+  main: (result: AnalysisResult, filter: string, search: string, ctx: TuiLayoutContext) => string[];
+  side: (result: AnalysisResult, filter: string, search: string, ctx: TuiLayoutContext) => string[];
 }
 
 function applyTextFilter(lines: string[], filter: string, search: string): string[] {
   const query = (search || filter).trim().toLowerCase();
   if (!query) return lines;
   return lines.filter((line) => line.toLowerCase().includes(query));
+}
+
+function withByoAiNotice(ai: AiAnalysis, body: string[]): string[] {
+  const n = ai.byoProviderNotice?.trim();
+  if (!n) return body;
+  return ["━━ Bring-your-own LLM ━━", n, "", ...body];
 }
 
 function formatDuration(start: string, end: string): string {
@@ -69,7 +90,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
     id: "summary",
     title: "Incident Overview",
     description: "Summary-first context for rapid incident understanding.",
-    main: (result) => {
+    main: (result, _f, _s, _ctx) => {
       const a = result.assessment;
       const ai = result.ai;
       const triggerMessage = a.triggerEvent ? a.triggerEvent.slice(0, 72) : "No trigger identified";
@@ -77,19 +98,26 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
         ? a.strongestSignals.map((s, i) => `${i + 1}. ${s}`)
         : ["Strongest signals: none of incident significance"];
 
-      const useAi = ai.available;
+      const preferAi = aiHasUsableContent(ai);
       const engineFallback = a.summaryNarrative || result.summary.incidentSummary;
-      const narrative = useAi ? (ai.summary ?? engineFallback) : (engineFallback || "No incident summary available yet.");
-      const explanation = useAi ? undefined : a.humanExplanation;
-      const causes = useAi ? ai.rootCauseCandidates : (a.suggestedCauses ?? []);
-      const fixes = useAi ? ai.recommendedChecks : (a.suggestedFixes ?? []);
+      const narrative = preferAi
+        ? aiPrimaryHeadline(ai) || (ai.summary ?? engineFallback)
+        : engineFallback || "No incident summary available yet.";
+      const explanation = preferAi ? undefined : a.humanExplanation;
+      const causes = preferAi ? displayRootCauseLines(ai, a.rootCauseCandidates).map((l) => l.split("\n")[0]) : (a.suggestedCauses ?? []);
+      const fixes = preferAi
+        ? displayRecommendedLines(ai, a.recommendedActions).map((l) => l.split("\n")[0])
+        : (a.suggestedFixes ?? []);
 
       return [
         "Incident Verdict",
         a.verdict,
+        `  ${METRIC_HINT_VERDICT_TUI}`,
         `Severity: ${a.severity}`,
         `Health score: ${a.healthScore} / 100`,
+        `  ${METRIC_HINT_HEALTH_TUI}`,
         `Confidence: ${result.summary.confidence}%`,
+        `  ${METRIC_HINT_SUMMARY_CONFIDENCE_TUI}`,
         `Reason: ${a.verdictReason}`,
         "",
         "What happened",
@@ -119,8 +147,19 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
         "Strongest signals",
         ...strongestSignals,
         "",
-        ...(useAi
-          ? []
+        ...(preferAi
+          ? [
+              "AI root-cause view (ranked)",
+              ...displayRootCauseLines(ai, a.rootCauseCandidates).slice(0, 5).flatMap((block) => block.split("\n")),
+              "",
+              "AI recommended checks",
+              ...displayRecommendedLines(ai, a.recommendedActions).slice(0, 5).flatMap((block) => block.split("\n")),
+              "",
+              ...(ai.confidenceStatement?.trim()
+                ? ["Confidence (AI)", ai.confidenceStatement.trim(), ""]
+                : []),
+              ...(ai.caveats?.length ? ["Caveats", ...ai.caveats.slice(0, 4).map((c) => `• ${c}`), ""] : []),
+            ]
           : [
               "Root cause candidates",
               ...(a.rootCauseCandidates.length
@@ -138,30 +177,34 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
         ...(fixes.length ? ["Suggested fixes", ...fixes.map((f) => `  • ${f}`), ""] : []),
       ];
     },
-    side: (result) => [
+    side: (result, _f, _s, _ctx) => [
       "Incident metadata",
       `Verdict: ${result.assessment.verdict}`,
+      `  ${METRIC_HINT_VERDICT_TUI}`,
       `Severity: ${result.assessment.severity}`,
       `Health: ${result.assessment.healthScore}/100`,
+      `  ${METRIC_HINT_HEALTH_TUI}`,
       `Confidence: ${result.summary.confidence}%`,
+      `  ${METRIC_HINT_SUMMARY_CONFIDENCE_TUI}`,
       `Mode: ${result.mode}`,
       `Window: ${result.summary.incidentWindow.start} -> ${result.summary.incidentWindow.end}`,
       `Duration: ${formatDuration(result.summary.incidentWindow.start, result.summary.incidentWindow.end)}`,
       `Services analyzed: ${result.assessment.serviceCount}`,
+      `  ${METRIC_HINT_SERVICES_TUI}`,
       `Primary service: ${result.assessment.primaryService}`,
       "",
       "Diagnostics",
       `Warnings: ${result.diagnostics.warnings.length}`,
       `Errors: ${result.diagnostics.errors.length}`,
       `Anomalies: ${result.assessment.anomalyCount}`,
-      `AI: ${result.ai.available ? "available" : "unavailable"}`,
+      `AI: ${aiHasUsableContent(result.ai) ? "active (enriched)" : result.ai.available ? "available (sparse)" : "unavailable"}`,
     ],
   },
   timeline: {
     id: "timeline",
     title: "Timeline",
     description: "Ordered event progression with trigger/anomaly emphasis.",
-    main: (result, filter, search) => {
+    main: (result, filter, search, _ctx) => {
       const sortedRaw = [...result.timeline].sort((a, b) => {
         const aKnown = a.timestamp !== "unknown";
         const bKnown = b.timestamp !== "unknown";
@@ -199,7 +242,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
       if (!filtered.length) return ["No timeline events match current search/filter."];
       return filtered;
     },
-    side: (result) => {
+    side: (result, _f, _s, _ctx) => {
       const anomalies = result.timeline.filter((entry) => entry.anomaly).length;
       const triggers = result.timeline.filter((entry) => entry.isTrigger).length;
       const reconstructed = result.assessment.reconstructedTimeline ?? [];
@@ -230,7 +273,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
     id: "trace-graph",
     title: "Trace Graph",
     description: "Inferred failure propagation: who triggered → who reacted → what happened.",
-    main: (result, _filter, _search) => {
+    main: (result, _filter, _search, _ctx) => {
       const tg = result.traceGraph;
       const lines: string[] = ["Trace Flow", "─".repeat(28), ""];
 
@@ -277,7 +320,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
       }
       return lines;
     },
-    side: (result) => {
+    side: (result, _f, _s, _ctx) => {
       const tg = result.traceGraph;
       const trigger = result.assessment;
       const topSigs = [...result.signals].sort((a, b) => (b.score ?? b.count ?? 0) - (a.score ?? a.count ?? 0)).slice(0, 3);
@@ -305,7 +348,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
     id: "mindmap",
     title: "Mind Map",
     description: "Incident structure as hierarchy (same as web UI).",
-    main: (result, _filter, _search) => {
+    main: (result, _filter, _search, _ctx) => {
       const s = result.assessment;
       const ai = result.ai;
       const topSignals = [...result.signals].sort((a, b) => (b.score ?? b.count ?? 0) - (a.score ?? a.count ?? 0)).slice(0, 5);
@@ -327,7 +370,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
         ...(ai.recommendedChecks?.slice(0, 3).map((a) => `    ${a}`) || ["    -"]),
       ];
     },
-    side: (result) => [
+    side: (result, _f, _s, _ctx) => [
       "Mind map context",
       "Hierarchical view of incident.",
       "",
@@ -340,7 +383,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
     id: "signals",
     title: "Signals",
     description: "Heuristic and anomaly signals ranked by evidence.",
-    main: (result, filter, search) => {
+    main: (result, filter, search, _ctx) => {
       const lines = [...result.signals]
         .sort((a, b) => (b.score ?? b.count ?? 0) - (a.score ?? a.count ?? 0))
         .map((signal) => {
@@ -350,7 +393,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
       const filtered = applyTextFilter(lines, filter, search);
       return filtered.length ? filtered : ["No signals match current search/filter."];
     },
-    side: (result) => [
+    side: (result, _f, _s, _ctx) => [
       "Signal context",
       `Total signals: ${result.signals.length}`,
       `Critical/Error: ${result.signals.filter((s) => s.severity === "critical" || s.severity === "error").length}`,
@@ -363,7 +406,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
     id: "evidence",
     title: "Evidence",
     description: "Filterable normalized event evidence for debugging depth.",
-    main: (result, filter, search) => {
+    main: (result, filter, search, _ctx) => {
       const lines = result.rawEvents.map(
         (event, idx) => {
           const scope = event.host ? `[${event.host}] ${event.service}` : event.service;
@@ -373,7 +416,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
       const filtered = applyTextFilter(lines, filter, search);
       return filtered.length ? filtered.slice(0, 42) : ["No evidence events match current search/filter."];
     },
-    side: (_result, filter, search) => [
+    side: (_result, filter, search, _ctx) => [
       "Filters",
       `Search: ${search || "-"}`,
       `Filter: ${filter || "-"}`,
@@ -386,68 +429,150 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
   },
   "ai-analysis": {
     id: "ai-analysis",
-    title: "AI Analysis",
-    description: "Structured reasoning and follow-up questions.",
-    main: (result) => {
-      if (!result.ai.available) {
-        return [
+    title: "AI interpretation",
+    description: "LLM interprets the engine payload (summary, narrative, checks) — not a second RCA engine.",
+    main: (result, _f, _s, ctx) => {
+      const ai = result.ai;
+      if (ai.enrichmentLoading) {
+        return withByoAiNotice(ai, [
+          "AI interpretation — loading",
+          "",
+          "Contacting the backend (Ollama may take a minute)…",
+          "",
+          "Summary, Timeline, Signals, and Evidence already show local analysis.",
+          "This panel will update when enrichment finishes.",
+        ]);
+      }
+      if (ai.enrichmentPending) {
+        return withByoAiNotice(ai, [
+          "AI interpretation — starting",
+          "",
+          "Enrichment is queued and will run in the background.",
+          "",
+          "Explore other panels now; this view updates automatically.",
+        ]);
+      }
+      if (!ai.available) {
+        return withByoAiNotice(ai, [
           "AI unavailable",
-          result.ai.warning || "No AI response yet.",
+          ai.warning || "No AI response yet.",
           "",
           "You can still investigate using timeline, signals, trace graph, and evidence.",
-        ];
+        ]);
       }
+      if (!aiHasUsableContent(ai)) {
+        return withByoAiNotice(ai, [
+          "AI connected — limited content",
+          ai.warning || "Backend returned little or no narrative. Use engine panels.",
+          "",
+          "Summary:",
+          ai.summary || "(empty)",
+        ]);
+      }
+      const lines: string[] = [
+        "━━ Operator briefing ━━",
+        aiPrimaryHeadline(ai) || ai.summary || "—",
+        "",
+        "━━ On-call narrative ━━",
+        (ai.operatorNarrative && ai.operatorNarrative.trim()) || "—",
+        "",
+        "━━ Timeline (AI) ━━",
+        aiOrEngineTimelineNarrative(ai, result.assessment.summaryNarrative),
+        "",
+      ];
+      if (ai.confidenceStatement?.trim()) {
+        lines.push("━━ Confidence ━━", ai.confidenceStatement.trim(), "");
+      }
+      lines.push("━━ Ranked hypotheses ━━", ...displayRootCauseLines(ai, result.assessment.rootCauseCandidates));
+      lines.push("");
+      lines.push("━━ Follow-up questions ━━");
+      lines.push(...(ai.followUpQuestions?.length ? ai.followUpQuestions.map((q) => `• ${q}`) : ["— none —"]));
+      if (ai.caveats?.length) {
+        lines.push("", "━━ Caveats ━━", ...ai.caveats.slice(0, 8).map((c) => `• ${c}`));
+      }
+      const arts = result.ai.followUpArtifacts ?? [];
+      if (arts.length) {
+        lines.push("", "━━ Explicit follow-ups (BYO) ━━");
+        for (const a of arts) {
+          lines.push(`── ${a.style} @ ${a.generatedAt} ──`, a.content.slice(0, 2000) + (a.content.length > 2000 ? "…" : ""), "");
+        }
+      }
+      if (ctx.byoFollowUpAvailable && aiHasUsableContent(ai) && ctx.followUpPickerOpen) {
+        lines.push(
+          "",
+          "━━ Follow-up picker open ━━",
+          `Press 1-${ENRICHMENT_STYLES_ORDER.length} to run another style, 0 to cancel.`,
+        );
+      } else if (ctx.byoFollowUpAvailable && aiHasUsableContent(ai)) {
+        lines.push("", "━━ More formats ━━", `Press n — then 1-${ENRICHMENT_STYLES_ORDER.length} (side panel lists styles).`);
+      }
+      return withByoAiNotice(ai, lines);
+    },
+    side: (result, _f, _s, ctx) => {
+      const ai = result.ai;
+      const menu = ENRICHMENT_STYLES_ORDER.map((s, i) => `${i + 1}=${s}`).join("  ");
       return [
-        "AI Summary",
-        result.ai.summary || "No summary available.",
+        "AI actions",
+        "g - refresh reasoning",
+        "u - manual AI update (live mode)",
+        ...(ctx.byoFollowUpAvailable && aiHasUsableContent(ai)
+          ? [`n - open follow-up style picker (then 1-${ENRICHMENT_STYLES_ORDER.length})`, `styles: ${menu}`, "0 - cancel picker"]
+          : []),
         "",
-        "Root cause candidates",
-        ...(result.ai.rootCauseCandidates.length ? result.ai.rootCauseCandidates.map((c) => `- ${c}`) : ["- none"]),
+        "Recommended checks",
+        ...(displayRecommendedLines(ai, result.assessment.recommendedActions).slice(0, 8).map((c) => `• ${c.split("\n").join(" ")}`)),
         "",
-        "Follow-up questions",
-        ...(result.ai.followUpQuestions.length ? result.ai.followUpQuestions.map((q) => `- ${q}`) : ["- none"]),
+        "Export / session",
+        "e - export analysis",
+        "w - save session snapshot",
       ];
     },
-    side: (result) => [
-      "AI actions",
-      "g - refresh reasoning",
-      "u - manual AI update (live mode)",
-      "",
-      "Recommended checks",
-      ...(result.ai.recommendedChecks.length ? result.ai.recommendedChecks.slice(0, 6).map((c) => `- ${c}`) : ["- none"]),
-    ],
   },
   reports: {
     id: "reports",
-    title: "Reports & Actions",
-    description: "Generate and export incident outputs.",
-    main: (result) => [
-      "Generate",
-      "r - Incident summary",
-      "c - Root cause analysis",
-      "i - Interview STAR story",
-      "T - Technical timeline",
-      "",
-      "Export",
-      "e - export (JSON/Markdown/HTML/PDF*)",
-      "w - save snapshot/session",
-      "",
-      "Status",
-      `Generated reports: ${Object.keys(result.ai.reports).length}`,
-      `Session mode: ${result.mode}`,
-    ],
-    side: (result) => [
-      "Report inventory",
-      ...(Object.values(result.ai.reports).length
-        ? Object.values(result.ai.reports).map((r) => `- ${r.title} @ ${r.generatedAt}`)
-        : ["No reports generated yet."]),
-    ],
+    title: "Reports (engine)",
+    description: "On-demand RCA and STAR (engine-only; no AI — same as web Reports).",
+    main: (result) => {
+      const hr = result.heuristicReports;
+      const lines: string[] = [
+        "Engine-built documents (no auto-generate).",
+        "Keys: R = RCA   I = STAR interview   (engine-only; does not use AI enrichment)",
+        "",
+      ];
+      if (!hr?.rca && !hr?.interview) {
+        lines.push("— No reports generated yet —", "", "Press R or I, or use web Reports tab / CLI --heuristic-rca / --heuristic-interview.");
+        return lines;
+      }
+      if (hr.rca) {
+        lines.push(`━━ RCA @ ${hr.rca.generatedAt} ━━`, ...hr.rca.markdown.split("\n"), "");
+      }
+      if (hr.interview) {
+        lines.push(`━━ Interview (STAR) @ ${hr.interview.generatedAt} ━━`, ...hr.interview.markdown.split("\n"), "");
+      }
+      return lines;
+    },
+    side: (result) => {
+      const hr = result.heuristicReports;
+      return [
+        "Generate (explicit)",
+        "R - snapshot RCA from current result",
+        "I - snapshot STAR interview",
+        "",
+        "Status",
+        hr?.rca ? `RCA: ${hr.rca.generatedAt}` : "RCA: (none)",
+        hr?.interview ? `STAR: ${hr.interview.generatedAt}` : "STAR: (none)",
+        "",
+        "Same markdown as:",
+        "Web → Reports → Generate",
+        "CLI → --heuristic-rca / --heuristic-interview",
+      ];
+    },
   },
   diagnostics: {
     id: "diagnostics",
     title: "Diagnostics",
     description: "Schema and transport diagnostics for power users.",
-    main: (result) => {
+    main: (result, _f, _s, _ctx) => {
       const schemaLines = JSON.stringify(
         {
           schemaVersion: result.schema.schemaVersion,
@@ -488,7 +613,7 @@ export const PANEL_SPECS: Record<TuiPanelId, PanelSpec> = {
         ...(result.diagnostics.warnings.length ? result.diagnostics.warnings.map((w) => `- ${w}`) : ["- none"]),
       ];
     },
-    side: (result) => [
+    side: (result, _f, _s, _ctx) => [
       "Transport",
       `Backend reachable: ${result.diagnostics.transport.backendReachable ? "yes" : "no"}`,
       `Latency: ${result.diagnostics.transport.latencyMs ?? "n/a"}`,

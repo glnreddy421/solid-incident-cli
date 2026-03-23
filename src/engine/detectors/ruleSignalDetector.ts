@@ -76,6 +76,7 @@ export function detectRuleSignals(events: ParsedIncidentEvent[]): Signal[] {
     count: s.supportingEventIndexes.length,
     score: Math.min(10, 1 + s.supportingEventIndexes.length),
     description: `${s.description} (${s.supportingEventIndexes.length} evidence event${s.supportingEventIndexes.length === 1 ? "" : "s"})`,
+    supportingEventIndexes: [...s.supportingEventIndexes],
   }));
 }
 

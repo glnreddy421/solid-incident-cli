@@ -1,10 +1,9 @@
 import { resolve } from "path";
-import { writeFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import { Command, Help } from "commander";
-import { BackendAiClient } from "../api/backendClient.js";
-import type { InputSource, RawLogLine } from "../contracts/index.js";
-import type { AnalyzeFlags, AnalysisResult, AppMode, ReportType, SessionRecord } from "../contracts/index.js";
-import { BackendUnavailableError, InputError, SolidError, TuiInitError } from "../contracts/index.js";
+import type { AiAnalysis, AnalysisContext, InputSource, RawLogLine } from "../contracts/index.js";
+import type { AnalyzeFlags, AnalysisResult, AppMode, SessionRecord } from "../contracts/index.js";
+import { InputError, SolidError, TuiInitError } from "../contracts/index.js";
 import { analyzeLocally } from "../engine/analysisEngine.js";
 import { deriveAssessment } from "../engine/incidentAssessment.js";
 import { renderByMode, renderError } from "../output/renderers.js";
@@ -15,6 +14,18 @@ import { runWithAnalyzingAnimation } from "../tui/analyzingAnimation.js";
 import { serveAnalysis } from "../web/server.js";
 import { LiveIngestionMultiplexer } from "../core/live/liveIngestionMultiplexer.js";
 import type { SourceDescriptor } from "../core/live/types.js";
+import { BYO_OUTBOUND_LLM_NOTICE } from "../enrich/enrichCliShared.js";
+import { runEnrich } from "../enrich/commands/runEnrich.js";
+import {
+  applyByoEnrichmentToAnalysisResult,
+  executeByoFollowUp,
+  isByoEnrichConfigured,
+  mergeEngineAiWithEnriched,
+  validateEnrichmentStyleInput,
+} from "../enrich/applyByoToAnalysis.js";
+import { applyHeuristicReport } from "../reports/heuristicStructuredReports.js";
+import { runReportCommand } from "./reportCommand.js";
+import type { TuiActions } from "../tui/renderer.js";
 import { loadInput } from "./input.js";
 import { decideMode, detectTerminalCapabilities } from "./mode.js";
 import { getCompletionScript } from "./completion.js";
@@ -31,6 +42,20 @@ interface AnalyzeOptions extends AnalyzeFlags {
   web?: boolean;
   port?: number;
   open?: boolean;
+  /** BYO LLM (same contract as `solidx enrich`) */
+  provider?: string;
+  url?: string;
+  apiKey?: string;
+  model?: string;
+  style?: string;
+  enrichTimeout?: number;
+  header?: string[];
+  temperature?: number;
+  maxTokens?: number;
+  systemPromptFile?: string;
+  promptFile?: string;
+  /** Additional BYO passes after primary enrich (non-TUI / blocking analyze only). */
+  followUp?: string[];
 }
 
 function addAnalyzeOptions(command: Command): Command {
@@ -49,65 +74,99 @@ function addAnalyzeOptions(command: Command): Command {
     .option("--save", "Persist analysis as a local session snapshot")
     .option("--session-name <name>", "Set a friendly title for saved session")
     .option("--verbose", "Print extended diagnostics and stack context")
-    .option("--no-ai", "Disable backend AI enrichment and report generation")
+    .option("--no-ai", "Disable BYO LLM (--provider)")
     .option("--finalize", "Mark generated session/report as finalized")
-    .option("--report", "Generate incident report from structured schema")
-    .option("--rca", "Generate root-cause analysis report")
-    .option("--interview-story", "Generate interview-style STAR story")
+    .option(
+      "--heuristic-rca",
+      "Non-TUI only: after full pipeline, attach engine-only structured RCA (same as web/TUI R; no AI)",
+    )
+    .option(
+      "--heuristic-interview",
+      "Non-TUI only: attach engine-only STAR narrative (same as web/TUI I; no AI)",
+    )
     .option("--web", "Hand off analysis to web UI on local port")
     .option("--port <number>", "Port for web UI (default: 3456)", (v) => parseInt(v || "3456", 10))
     .option("--no-open", "Do not open browser when starting web UI");
 }
 
-async function maybeGenerateReports(result: AnalysisResult, client: BackendAiClient, options: AnalyzeOptions): Promise<void> {
-  const requested: ReportType[] = [];
-  if (options.report) requested.push("incident");
-  if (options.rca) requested.push("rca");
-  if (options.interviewStory) requested.push("interview-story");
-  if (requested.length === 0 || options.noAi) return;
+function addByoEnrichOptions(command: Command): Command {
+  return command
+    .option(
+      "--provider <name>",
+      "BYO LLM after heuristics: openai-compatible | noop (structured payload; same as solidx enrich). " +
+        "With openai-compatible you choose the endpoint; outbound data and provider risk are yours, not SOLIDX’s.",
+    )
+    .option("--url <endpoint>", "OpenAI-compatible API base URL (required for openai-compatible)")
+    .option("--api-key <key>", "Optional API key for BYO provider")
+    .option("--model <model>", "Optional model id for BYO provider")
+    .option("--style <style>", "Enrichment style with --provider", "briefing")
+    .option("--enrich-timeout <ms>", "BYO HTTP timeout in milliseconds", (v) => Number.parseInt(v || "45000", 10))
+    .option(
+      "--header <key:value>",
+      "Extra HTTP header for BYO provider (repeatable)",
+      (value, acc: string[]) => [...acc, value],
+      [],
+    )
+    .option("--temperature <number>", "BYO sampling temperature", (v) => Number.parseFloat(v))
+    .option("--max-tokens <number>", "BYO max completion tokens", (v) => Number.parseInt(v, 10))
+    .option("--system-prompt-file <path>", "Override BYO system prompt from file")
+    .option("--prompt-file <path>", "Override BYO user prompt from file")
+    .option(
+      "--follow-up <style>",
+      "After primary BYO enrich, run another pass (repeatable): rca, executive, runbook, star, car, debug, questions (see --style list)",
+      (value, acc: string[]) => [...acc, value],
+      [],
+    );
+}
 
-  for (const type of requested) {
-    const body = await client.generateReport(result.schema, type);
-    result.ai.reports[type] = {
-      type,
-      title: type === "incident" ? "Incident Report" : type === "rca" ? "RCA Report" : "Interview STAR Story",
-      body: body || "Backend did not return report content.",
-      generatedAt: new Date().toISOString(),
-    };
+function analysisInputLabel(result: AnalysisResult): string {
+  const names = result.inputSources.map((s) => s.name).filter(Boolean);
+  return names.length ? names.join(",") : "analyze";
+}
+
+function markLazyEnrichPending(result: AnalysisResult, options: AnalyzeOptions): void {
+  if (options.noAi) return;
+  if (options.live && isByoEnrichConfigured(options)) return;
+  if (isByoEnrichConfigured(options)) {
+    result.ai.enrichmentPending = true;
+    result.ai.enrichmentLoading = false;
+    result.ai.warning = "LLM enrichment is starting…";
+    if (options.provider?.trim() === "openai-compatible") {
+      result.ai.byoProviderNotice = BYO_OUTBOUND_LLM_NOTICE;
+    }
   }
 }
 
 async function maybeEnrichWithAi(result: AnalysisResult, options: AnalyzeOptions): Promise<void> {
   if (options.noAi) {
     result.ai.warning = "AI disabled by --no-ai flag.";
+    result.ai.enrichmentPending = false;
+    result.ai.enrichmentLoading = false;
     return;
   }
-  const client = new BackendAiClient();
-  if (!client.isConfigured()) {
-    result.ai.warning = "AI unavailable: backend is not configured.";
-    return;
-  }
-  try {
-    const ai = await client.enrichIncident(result.schema);
-    result.ai = ai;
-    result.diagnostics.transport.backendReachable = true;
-  } catch (error) {
-    if (error instanceof BackendUnavailableError) {
+  if (isByoEnrichConfigured(options)) {
+    result.ai.enrichmentPending = false;
+    result.ai.enrichmentLoading = true;
+    try {
+      await applyByoEnrichmentToAnalysisResult(result, options, analysisInputLabel(result));
+    } catch (error) {
+      result.ai.enrichmentLoading = false;
+      result.ai.enrichmentPending = false;
       result.ai.available = false;
-      result.ai.warning = `AI unavailable: ${error.message}`;
-      result.diagnostics.warnings.push(error.message);
+      const msg = error instanceof Error ? error.message : String(error);
+      result.ai.warning = `BYO enrichment failed: ${msg}`;
+      result.diagnostics.warnings.push(result.ai.warning);
       return;
     }
-    throw error;
+    result.ai.enrichmentLoading = false;
+    result.ai.enrichmentPending = false;
+    result.diagnostics.transport.backendReachable = false;
+    return;
   }
-  await maybeGenerateReports(result, client, options);
-}
 
-async function renderAndPrint(result: AnalysisResult, mode: AppMode): Promise<void> {
-  if (mode === "tui") {
-    throw new TuiInitError("TUI mode requires runTuiWithFallback wrapper.");
-  }
-  process.stdout.write(`${renderByMode(result, mode)}\n`);
+  result.ai.warning = "AI unavailable: add --provider openai-compatible (or noop) for LLM enrichment.";
+  result.ai.enrichmentPending = false;
+  result.ai.enrichmentLoading = false;
 }
 
 function fromSession(session: SessionRecord, mode: AppMode): AnalysisResult {
@@ -146,51 +205,51 @@ function fromSession(session: SessionRecord, mode: AppMode): AnalysisResult {
   };
 }
 
+export type TuiEnrichContext = Pick<AnalyzeOptions, "noAi" | "live"> & {
+  /** Full analyze flags for maybeEnrichWithAi (BYO). */
+  enrichFrom?: AnalyzeOptions;
+};
+
 export async function runTuiWithFallback(
   result: AnalysisResult,
   runtime?: Pick<AnalyzeOptions, "inspect" | "interval" | "hideHeader" | "skipSplash" | "logLevel">,
   liveUpdate?: import("../tui/renderer.js").LiveUpdateConfig,
-  options?: Pick<AnalyzeOptions, "noAi">
+  options?: TuiEnrichContext,
+  extraTuiActions?: Partial<TuiActions>,
 ): Promise<{ fellBack: boolean; fallbackText?: string }> {
-  const client = new BackendAiClient();
-  const useAi = !options?.noAi && client.isConfigured();
+  const enrichOpts: AnalyzeOptions =
+    options?.enrichFrom ??
+    ({
+      noAi: options?.noAi,
+      live: options?.live,
+    } as AnalyzeOptions);
+  const useEnrich = !options?.noAi && isByoEnrichConfigured(enrichOpts);
 
   try {
     await runTui(result, {
-      onGenerateIncidentReport: async (r) => {
-        if (!useAi) return;
-        const body = await client.generateReport(r.schema, "incident");
-        r.ai.reports.incident = { type: "incident", title: "Incident Report", body, generatedAt: new Date().toISOString() };
-      },
-      onGenerateRcaReport: async (r) => {
-        if (!useAi) return;
-        const body = await client.generateReport(r.schema, "rca");
-        r.ai.reports.rca = { type: "rca", title: "RCA Report", body, generatedAt: new Date().toISOString() };
-      },
-      onGenerateInterviewStory: async (r) => {
-        if (!useAi) return;
-        const body = await client.generateReport(r.schema, "interview-story");
-        r.ai.reports["interview-story"] = { type: "interview-story", title: "Interview STAR Story", body, generatedAt: new Date().toISOString() };
-      },
-      onGenerateTechnicalTimeline: async () => {},
       onRefreshAi: async (r) => {
-        if (!useAi) return;
+        if (!useEnrich) return;
         try {
-          const ai = await client.enrichIncident(r.schema);
-          r.ai = ai;
+          await maybeEnrichWithAi(r, enrichOpts);
         } catch (err) {
           r.ai.available = false;
-          r.ai.warning = err instanceof BackendUnavailableError ? err.message : "Backend request failed.";
+          r.ai.enrichmentLoading = false;
+          r.ai.enrichmentPending = false;
+          r.ai.warning = err instanceof Error ? err.message : "LLM refresh failed.";
         }
       },
       onExport: async (_r) => {},
       onSave: async (_r) => {},
+      ...extraTuiActions,
     }, {
       inspect: runtime?.inspect,
       intervalSeconds: runtime?.interval,
       hideHeader: runtime?.hideHeader,
       skipSplash: runtime?.skipSplash,
       logLevel: runtime?.logLevel,
+      backgroundEnrich: useEnrich && result.ai.enrichmentPending ? () => maybeEnrichWithAi(result, enrichOpts) : undefined,
+      byoFollowUpAvailable: isByoEnrichConfigured(enrichOpts) && !options?.noAi,
+      byoEnrichOptions: enrichOpts,
     }, liveUpdate);
     return { fellBack: false };
   } catch (error) {
@@ -231,7 +290,18 @@ async function runLiveAnalyze(files: string[], options: AnalyzeOptions): Promise
   await multiplexer.start(fileSources);
 
   const intervalSeconds = options.interval ?? 2;
-  const getResult = (): AnalysisResult => {
+  const liveAiSnapshot: { ai: AiAnalysis | null } = { ai: null };
+  /** Preserved across live re-analyze ticks so finalize (F) keeps final-style wording until quit. */
+  const liveSessionFlags = { streamFinalized: false };
+  let liveEnrichBusy = false;
+  let liveEnrichInterval: ReturnType<typeof setInterval> | null = null;
+
+  const liveAnalysisContext = (): AnalysisContext => ({
+    runKind: "live",
+    ...(liveSessionFlags.streamFinalized ? { streamFinalized: true } : {}),
+  });
+
+  const getFresh = (): AnalysisResult => {
     if (rawLines.length === 0) {
       throw new SolidError("EMPTY_INPUT", "No logs yet. Waiting for input…", { recoverable: true });
     }
@@ -239,8 +309,59 @@ async function runLiveAnalyze(files: string[], options: AnalyzeOptions): Promise
       rawLines: [...rawLines],
       inputSources: sources,
       mode: "tui",
+      analysisContext: liveAnalysisContext(),
     });
   };
+
+  const getResult = (): AnalysisResult => {
+    const base = getFresh();
+    const baseAi =
+      !options.noAi && options.provider?.trim() === "openai-compatible"
+        ? { ...base.ai, byoProviderNotice: BYO_OUTBOUND_LLM_NOTICE }
+        : base.ai;
+    let ai = liveAiSnapshot.ai ? mergeEngineAiWithEnriched(baseAi, liveAiSnapshot.ai) : baseAi;
+    if (liveEnrichBusy) {
+      ai = { ...ai, enrichmentLoading: true, enrichmentPending: false };
+    }
+    return { ...base, ai };
+  };
+
+  if (!options.noAi && isByoEnrichConfigured(options)) {
+    const enrichEveryMs = Math.max(2000, intervalSeconds * 1000);
+    const tick = (): void => {
+      if (liveEnrichBusy || rawLines.length === 0) return;
+      liveEnrichBusy = true;
+      let snap: AnalysisResult;
+      try {
+        snap = getFresh();
+      } catch {
+        liveEnrichBusy = false;
+        return;
+      }
+      void applyByoEnrichmentToAnalysisResult(snap, options, "live-tail")
+        .then(() => {
+          liveAiSnapshot.ai = { ...snap.ai };
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          liveAiSnapshot.ai = {
+            ...snap.ai,
+            available: false,
+            enrichmentLoading: false,
+            enrichmentPending: false,
+            warning: `BYO enrichment failed: ${msg}`,
+            ...(options.provider?.trim() === "openai-compatible"
+              ? { byoProviderNotice: BYO_OUTBOUND_LLM_NOTICE }
+              : {}),
+          };
+        })
+        .finally(() => {
+          liveEnrichBusy = false;
+        });
+    };
+    liveEnrichInterval = setInterval(tick, enrichEveryMs);
+    queueMicrotask(tick);
+  }
 
   let initialResult: AnalysisResult;
   try {
@@ -250,6 +371,7 @@ async function runLiveAnalyze(files: string[], options: AnalyzeOptions): Promise
       rawLines: [{ line: "Waiting for logs…", lineNumber: 1, source: "file", sourceName: files[0] ?? "stdin" }],
       inputSources: sources,
       mode: "tui",
+      analysisContext: liveAnalysisContext(),
     });
   }
 
@@ -265,31 +387,64 @@ async function runLiveAnalyze(files: string[], options: AnalyzeOptions): Promise
     {
       intervalSeconds,
       getResult,
-      onQuit: () => multiplexer.stop(),
+      onQuit: () => {
+        if (liveEnrichInterval) clearInterval(liveEnrichInterval);
+        liveEnrichInterval = null;
+        multiplexer.stop();
+      },
     },
-    { noAi: options.noAi }
+    { noAi: options.noAi, enrichFrom: options, live: true },
+    {
+      onFinalizeLive: async (r) => {
+        liveSessionFlags.streamFinalized = true;
+        r.metadata = {
+          ...r.metadata,
+          analysisContext: {
+            runKind: "live",
+            streamFinalized: true,
+          },
+        };
+      },
+    },
   );
 }
 
 export async function runAnalyze(files: string[], options: AnalyzeOptions): Promise<void> {
+  const forceNonInteractiveOutput = Boolean(options.output);
+  const hasExplicitFormat = Boolean(options.json || options.text || options.md || options.html);
+  const effectiveOptions: AnalyzeOptions = forceNonInteractiveOutput
+    ? {
+        ...options,
+        noTui: true,
+        json: hasExplicitFormat ? options.json : true,
+      }
+    : options;
   const caps = detectTerminalCapabilities();
-  const mode = options.web ? "text" : decideMode(options, caps);
+  const mode = effectiveOptions.web ? "text" : decideMode(effectiveOptions, caps);
+
+  if (!effectiveOptions.noAi && effectiveOptions.provider?.trim() === "openai-compatible") {
+    process.stderr.write(`[solidx] ${BYO_OUTBOUND_LLM_NOTICE}\n\n`);
+  }
 
   let result: AnalysisResult;
 
-  if (options.live && files.length > 0 && caps.interactive) {
-    await runLiveAnalyze(files, options);
+  if (effectiveOptions.live && files.length > 0 && caps.interactive) {
+    await runLiveAnalyze(files, effectiveOptions);
     return;
   }
 
-  if (options.web) {
-    const input = await loadInput(files);
-    result = analyzeLocally({
-      rawLines: input.lines,
-      inputSources: input.sources,
-      mode: "text",
-    });
-    await maybeEnrichWithAi(result, options);
+  if (effectiveOptions.web) {
+    result = await runWithAnalyzingAnimation(
+      async () => {
+        const input = await loadInput(files);
+        return analyzeLocally({
+          rawLines: input.lines,
+          inputSources: input.sources,
+          mode: "text",
+        });
+      },
+      { skipSplash: options.skipSplash ?? true, useAi: false },
+    );
   } else if (mode === "tui" && caps.interactive) {
     result = await runWithAnalyzingAnimation(
       async () => {
@@ -299,10 +454,9 @@ export async function runAnalyze(files: string[], options: AnalyzeOptions): Prom
           inputSources: input.sources,
           mode,
         });
-        await maybeEnrichWithAi(r, options);
         return r;
       },
-      { skipSplash: options.skipSplash, useAi: !options.noAi }
+      { skipSplash: options.skipSplash, useAi: false },
     );
   } else {
     const input = await loadInput(files);
@@ -311,35 +465,79 @@ export async function runAnalyze(files: string[], options: AnalyzeOptions): Prom
       inputSources: input.sources,
       mode,
     });
-    await maybeEnrichWithAi(result, options);
   }
 
-  if (options.save) {
+  if (!effectiveOptions.web && mode !== "tui" && !effectiveOptions.live && !effectiveOptions.noAi) {
+    await maybeEnrichWithAi(result, effectiveOptions);
+  }
+
+  if (
+    effectiveOptions.followUp?.length &&
+    !effectiveOptions.noAi &&
+    isByoEnrichConfigured(effectiveOptions)
+  ) {
+    for (const fu of effectiveOptions.followUp) {
+      const st = validateEnrichmentStyleInput(fu);
+      await executeByoFollowUp(result, effectiveOptions, st);
+    }
+  }
+
+  if (!effectiveOptions.web && mode !== "tui" && !effectiveOptions.live) {
+    if (effectiveOptions.heuristicRca) {
+      applyHeuristicReport(result, "rca");
+    }
+    if (effectiveOptions.heuristicInterview) {
+      applyHeuristicReport(result, "interview");
+    }
+  }
+
+  if (effectiveOptions.save) {
     const session = await saveSession(result, options.sessionName);
     result.diagnostics.warnings.push(`Saved session ${session.sessionId}`);
   }
 
-  if (options.web) {
-    const { port, url } = await serveAnalysis(result, {
-      port: options.port ?? 3456,
-      openBrowser: options.open !== false,
+  if (effectiveOptions.web) {
+    markLazyEnrichPending(result, effectiveOptions);
+    const lazy = Boolean(result.ai.enrichmentPending);
+    const { url } = await serveAnalysis(result, {
+      port: effectiveOptions.port ?? 3456,
+      openBrowser: effectiveOptions.open !== false,
+      backgroundEnrich: lazy ? () => maybeEnrichWithAi(result, effectiveOptions) : undefined,
     });
     process.stdout.write(`\nWeb UI ready at ${url}\n`);
+    if (lazy) {
+      process.stdout.write(`LLM enrichment is running in the background — refresh or open the AI tab; it will update when ready.\n`);
+    }
     process.stdout.write(`Press Ctrl+C to stop the server.\n\n`);
     return;
   }
 
   if (mode === "tui") {
-    await runTuiWithFallback(result, {
-      inspect: options.inspect,
-      interval: options.interval,
-      hideHeader: options.hideHeader,
-      skipSplash: true,
-      logLevel: options.logLevel,
-    }, undefined, { noAi: options.noAi });
+    markLazyEnrichPending(result, effectiveOptions);
+    await runTuiWithFallback(
+      result,
+      {
+        inspect: options.inspect,
+        interval: options.interval,
+        hideHeader: options.hideHeader,
+        skipSplash: true,
+        logLevel: options.logLevel,
+      },
+      undefined,
+      {
+        noAi: options.noAi,
+        live: effectiveOptions.live,
+        enrichFrom: effectiveOptions,
+      },
+    );
     return;
   }
-  await renderAndPrint(result, mode);
+  const rendered = renderByMode(result, mode);
+  if (effectiveOptions.output) {
+    await writeFile(effectiveOptions.output, rendered, "utf8");
+    return;
+  }
+  process.stdout.write(`${rendered}\n`);
 }
 
 async function runSessionList(): Promise<void> {
@@ -476,14 +674,24 @@ export function createProgram(version: string): Command {
     },
   });
 
-  addAnalyzeOptions(
-    program
-      .command("analyze [files...]")
-      .summary("Analyze logs from files/stdin")
-      .description("Analyze file and stdin logs using the shared local engine and optional backend AI.")
-      .addHelpText(
-        "after",
-        `
+  const analyzeCmd = program
+    .command("analyze [files...]")
+    .summary("Analyze logs from files/stdin")
+    .description(
+      "Run local deterministic heuristics, then optionally call a BYO LLM on the structured snapshot (--provider). " +
+        "`solidx enrich` re-runs LLM on saved JSON without re-parsing logs. " +
+        "SOLIDX does not host LLMs: with openai-compatible, you supply the URL and bear responsibility for that service, data handling, and model output."
+    )
+    .option("-o, --output <path>", "Write rendered analysis output to a file");
+  addAnalyzeOptions(analyzeCmd);
+  addByoEnrichOptions(analyzeCmd);
+  analyzeCmd
+    .addHelpText(
+      "after",
+      `
+BYO / openai-compatible: enrichment sends a structured payload from your machine to the URL you configure.
+You are responsible for that endpoint, credentials, compliance, and model behavior. SOLIDX is not responsible for your BYO provider.
+
 Examples:
   solidx analyze app.log
   solidx analyze api.log worker.log db.log
@@ -491,19 +699,158 @@ Examples:
   kubectl logs deploy/api -n prod | solidx analyze
   solidx analyze logs.txt --inspect --interval 2 --skip-splash
   solidx analyze logs.txt --json --no-ai
+
+BYO LLM on the same command (structured payload; no raw log dump by default):
+  solidx analyze app.log --provider openai-compatible \\
+    --url http://127.0.0.1:11434/v1 --model llama3.1
+
+  solidx analyze app.log --web --provider openai-compatible \\
+    --url https://api.openai.com/v1 --api-key "$OPENAI_API_KEY" --model gpt-4o-mini
+
+Live tail + periodic BYO refresh (uses --interval for both TUI and enrich cadence):
+  solidx analyze --live app.log --provider openai-compatible --url http://127.0.0.1:11434/v1 --model llama3.1
+
+Blocking analyze: extra BYO styles after primary enrich (repeatable --follow-up):
+  solidx analyze app.log --text --provider openai-compatible \\
+    --url http://127.0.0.1:11434/v1 --model llama3.1 \\
+    --follow-up executive --follow-up runbook
+
+Still useful: enrich-only on saved JSON (re-style / re-model without re-analyzing):
+  solidx analyze app.log --json -o analysis.json
+  solidx enrich analysis.json --provider openai-compatible --url http://127.0.0.1:11434/v1 --model llama3.1
+`,
+    )
+    .action(async function (this: Command, files: string[]) {
+      const opts = this.opts() as RawCommanderOptions;
+      const normalized: AnalyzeOptions = {
+        ...opts,
+        noAi: opts.noAi ?? opts.ai === false,
+        noTui: opts.noTui,
+        logLevel: normalizeLogLevel((opts as { logLevel?: string }).logLevel),
+      };
+      const p = normalized.provider?.trim();
+      if (p && p !== "noop" && p !== "openai-compatible") {
+        throw new SolidError("INVALID_FLAGS", `Unknown --provider "${p}". Use openai-compatible or noop.`, {
+          recoverable: true,
+        });
+      }
+      if (p === "openai-compatible" && !normalized.url?.trim()) {
+        throw new SolidError("INVALID_FLAGS", "--provider openai-compatible requires --url.", { recoverable: true });
+      }
+      if (normalized.followUp?.length && !isByoEnrichConfigured(normalized)) {
+        throw new SolidError(
+          "INVALID_FLAGS",
+          "--follow-up requires --provider (BYO). Each value must be a valid --style (see --help).",
+          { recoverable: true },
+        );
+      }
+      if (normalized.followUp?.length) {
+        for (const fu of normalized.followUp) {
+          validateEnrichmentStyleInput(fu);
+        }
+      }
+      await runAnalyze(files ?? [], normalized);
+    });
+
+  program
+    .command("enrich <analysisJson>")
+    .summary("Optional AI enrichment from analysis JSON")
+    .description(
+      "Run BYO LLM on analysis JSON without re-running heuristics. Prefer `solidx analyze … --provider …` when you want one command. " +
+        "With openai-compatible, outbound requests and provider risk are yours; SOLIDX does not operate your model."
+    )
+    .requiredOption("--provider <name>", "Provider name (openai-compatible | noop)")
+    .option("--url <endpoint>", "Provider endpoint/base URL")
+    .option("--api-key <key>", "Provider API key (or pass through env)")
+    .option("--model <model>", "Model name")
+    .option(
+      "--style <style>",
+      "briefing | rca | executive | runbook | star | car | debug | questions",
+      "briefing",
+    )
+    .option("--timeout <ms>", "Request timeout in milliseconds", (v) => Number.parseInt(v || "45000", 10))
+    .option("--header <key:value>", "Custom HTTP header (repeatable)", (value, acc: string[]) => [...acc, value], [])
+    .option("--system-prompt-file <path>", "Override system prompt with file")
+    .option("--prompt-file <path>", "Override user prompt with file")
+    .option("--output <path>", "Write enrichment output to file")
+    .option("--format <format>", "json | markdown | text", "text")
+    .option("--temperature <number>", "Sampling temperature", (v) => Number.parseFloat(v))
+    .option("--max-tokens <number>", "Max completion tokens", (v) => Number.parseInt(v, 10))
+    .addHelpText(
+      "after",
+      `
+BYO / openai-compatible: this command POSTs from your environment to the URL you set. Endpoint choice, secrets, data policy, and model output are your responsibility.
+
+Examples:
+  solidx analyze logs.txt --json -o analysis.json
+  solidx enrich analysis.json --provider openai-compatible --url http://localhost:11434/v1 --model llama3.1
+  solidx enrich analysis.json --provider openai-compatible --url https://my-gateway.example.com/v1 --api-key $API_KEY --model my-model --style executive
 `
-      )
-      .action(async function (this: Command, files: string[]) {
-    const opts = this.opts() as RawCommanderOptions;
-    const normalized: AnalyzeOptions = {
-      ...opts,
-      noAi: opts.noAi ?? opts.ai === false,
-      noTui: opts.noTui,
-      logLevel: normalizeLogLevel((opts as { logLevel?: string }).logLevel),
-    };
-    await runAnalyze(files ?? [], normalized);
-  })
-  );
+    )
+    .action(async function (this: Command, analysisJson: string) {
+      const opts = this.opts() as {
+        provider: string;
+        url?: string;
+        apiKey?: string;
+        model?: string;
+        style?: "briefing" | "rca" | "executive" | "runbook" | "star" | "car" | "debug" | "questions";
+        timeout?: number;
+        header?: string[];
+        systemPromptFile?: string;
+        promptFile?: string;
+        output?: string;
+        format?: "json" | "markdown" | "text";
+        temperature?: number;
+        maxTokens?: number;
+      };
+      await runEnrich(analysisJson, opts);
+    });
+
+  program
+    .command("report <analysisJson>")
+    .summary("Deterministic polished report from analysis JSON")
+    .description(
+      "Render RCA, STAR, CAR, executive, debug, or timeline narrative from heuristic engine fields only " +
+        "(templates + rule-based text cleanup). No LLM. During live tail, save JSON with `metadata.analysisContext.runKind: live` " +
+        "or pass `--state live` / `snapshot` for provisional wording."
+    )
+    .requiredOption("-s, --style <style>", "rca | star | car | executive | debug | timeline")
+    .option("--state <state>", "final | snapshot | live | partial (default: inferred from analysis JSON)")
+    .option("--no-polish", "Skip rule-based cleanup (whitespace, punctuation, dedupe, micro-grammar)")
+    .option("--no-confidence", "Omit confidence section where applicable")
+    .option("--no-trust-notes", "Omit trust / diagnostics notes where applicable")
+    .option("--no-suggested-fixes", "Omit suggested next steps where applicable")
+    .option("-o, --output <path>", "Write markdown report to file")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  solidx analyze app.log --json -o analysis.json
+  solidx report analysis.json --style rca
+  solidx report analysis.json -s star --state snapshot -o star.md
+  cat analysis.json | solidx report - --style timeline
+`,
+    )
+    .action(async function (this: Command, analysisJson: string) {
+      const opts = this.opts() as {
+        style: string;
+        state?: string;
+        polish?: boolean;
+        noConfidence?: boolean;
+        noTrustNotes?: boolean;
+        noSuggestedFixes?: boolean;
+        output?: string;
+      };
+      await runReportCommand(analysisJson, {
+        style: opts.style,
+        state: opts.state,
+        polish: opts.polish,
+        output: opts.output,
+        noConfidence: opts.noConfidence,
+        noTrustNotes: opts.noTrustNotes,
+        noSuggestedFixes: opts.noSuggestedFixes,
+      });
+    });
 
   const session = program.command("session").summary("Manage saved sessions").description("Manage local sessions");
   session.command("list").summary("List saved sessions").action(runSessionList);
@@ -569,7 +916,7 @@ Examples:
 }
 
 export async function runProgram(version: string, argv = process.argv): Promise<number> {
-  const knownCommands = new Set(["analyze", "session", "export", "config", "completion"]);
+  const knownCommands = new Set(["analyze", "enrich", "report", "session", "export", "config", "completion"]);
   const globalOnlyFlags = new Set(["--help", "-h", "--version", "-V"]);
   const normalizedArgv = [...argv];
   const firstUserArg = normalizedArgv[2];

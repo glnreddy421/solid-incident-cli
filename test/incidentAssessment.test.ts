@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeLocally } from "../src/engine/analysisEngine.js";
 import { PANEL_SPECS } from "../src/tui/panelSpecs.js";
+import { DEFAULT_TUI_LAYOUT_CONTEXT } from "../src/tui/layoutContext.js";
 import type { RawLogLine } from "../src/contracts/index.js";
 
 function toRaw(lines: string[]): RawLogLine[] {
@@ -21,7 +22,7 @@ describe("incident assessment and summary panel", () => {
     expect(result.assessment.verdict).toBe("NO INCIDENT");
     expect(result.assessment.triggerClassification).toBe("routine_telemetry");
     expect(result.assessment.primaryService).toBe("syslogd");
-    const lines = PANEL_SPECS.summary.main(result, "", "");
+    const lines = PANEL_SPECS.summary.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     expect(lines.join("\n")).toContain("Incident Verdict");
     expect(lines.join("\n")).toContain("NO INCIDENT");
     expect(lines.join("\n")).toContain("informational_log_cluster");
@@ -40,7 +41,7 @@ describe("incident assessment and summary panel", () => {
     });
     expect(result.assessment.verdict).toBe("POSSIBLE DEGRADATION");
     expect(result.assessment.severity === "low" || result.assessment.severity === "medium").toBe(true);
-    const lines = PANEL_SPECS.summary.main(result, "", "");
+    const lines = PANEL_SPECS.summary.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     expect(lines.join("\n")).toContain("POSSIBLE DEGRADATION");
     expect(lines.join("\n")).toContain("retry_burst");
   });
@@ -68,7 +69,7 @@ describe("incident assessment and summary panel", () => {
       mode: "text",
     });
     expect(result.assessment.verdict).toBe("INSUFFICIENT EVIDENCE");
-    const lines = PANEL_SPECS.summary.main(result, "", "");
+    const lines = PANEL_SPECS.summary.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     expect(lines.join("\n")).toContain("INSUFFICIENT EVIDENCE");
   });
 });

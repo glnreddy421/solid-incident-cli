@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeLocally } from "../../src/engine/analysisEngine.js";
 import { PANEL_SPECS } from "../../src/tui/panelSpecs.js";
+import { DEFAULT_TUI_LAYOUT_CONTEXT } from "../../src/tui/layoutContext.js";
 import type { TuiPanelId } from "../../src/contracts/index.js";
 import { toRawLines } from "../fixtures/helpers.js";
 
@@ -31,7 +32,7 @@ describe("TUI panel specs", () => {
     it(`${panelId} main renders without crashing`, () => {
       const spec = PANEL_SPECS[panelId];
       expect(spec).toBeDefined();
-      const lines = spec.main(result, "", "");
+      const lines = spec.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
       expect(Array.isArray(lines)).toBe(true);
       expect(lines.length).toBeGreaterThan(0);
     });
@@ -39,14 +40,14 @@ describe("TUI panel specs", () => {
     it(`${panelId} side renders without crashing`, () => {
       const spec = PANEL_SPECS[panelId];
       expect(spec).toBeDefined();
-      const lines = spec.side(result, "", "");
+      const lines = spec.side(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
       expect(Array.isArray(lines)).toBe(true);
       expect(lines.length).toBeGreaterThan(0);
     });
   }
 
   it("summary panel contains verdict and severity", () => {
-    const lines = PANEL_SPECS.summary.main(result, "", "");
+    const lines = PANEL_SPECS.summary.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     const text = lines.join("\n");
     expect(text).toContain("Incident Verdict");
     expect(text).toContain(result.assessment.verdict);
@@ -54,12 +55,12 @@ describe("TUI panel specs", () => {
   });
 
   it("timeline panel contains chronological events", () => {
-    const lines = PANEL_SPECS.timeline.main(result, "", "");
+    const lines = PANEL_SPECS.timeline.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     expect(lines.some((l) => l.includes("Raw chronological") || l.includes("api") || l.includes("gateway"))).toBe(true);
   });
 
   it("diagnostics panel contains score breakdown when available", () => {
-    const lines = PANEL_SPECS.diagnostics.main(result, "", "");
+    const lines = PANEL_SPECS.diagnostics.main(result, "", "", DEFAULT_TUI_LAYOUT_CONTEXT);
     expect(lines.length).toBeGreaterThan(0);
   });
 });

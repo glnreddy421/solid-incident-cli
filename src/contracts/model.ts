@@ -30,6 +30,17 @@ export interface RawLogLine {
   sourceName?: string;
 }
 
+/**
+ * How the analysis was produced — used by deterministic report polish to avoid
+ * presenting live / rolling output as a final postmortem.
+ */
+export interface AnalysisContext {
+  /** batch = full static run (file/stdin batch); live = tail still active; snapshot = explicit point-in-time slice */
+  runKind: "batch" | "live" | "snapshot";
+  /** When true, live stream ended and a final-style report is appropriate if runKind becomes batch on next analyze */
+  streamFinalized?: boolean;
+}
+
 export interface TerminalCapabilities {
   stdinIsTty: boolean;
   stdoutIsTty: boolean;
@@ -52,9 +63,10 @@ export interface AnalyzeFlags {
   hideHeader?: boolean;
   skipSplash?: boolean;
   logLevel?: "error" | "warn" | "info" | "debug";
-  report?: boolean;
-  rca?: boolean;
-  interviewStory?: boolean;
+  /** Non-TUI: after pipeline, snapshot RCA into `result.heuristicReports` (explicit only). */
+  heuristicRca?: boolean;
+  /** Non-TUI: after pipeline, snapshot STAR interview into `result.heuristicReports` (explicit only). */
+  heuristicInterview?: boolean;
   save?: boolean;
   sessionName?: string;
   verbose?: boolean;
@@ -139,6 +151,11 @@ export interface Signal {
   mlScore?: number;
   /** Score source: "ml" = K-means anomaly, "tfidf" = TF-IDF cluster rarity */
   scoreSource?: "ml" | "tfidf";
+  /**
+   * Parsed-event indices (same order as `timeline` / `parsedEvents`) that support this signal.
+   * Used for evidence drill-down in UIs.
+   */
+  supportingEventIndexes?: number[];
 }
 
 export interface IncidentSummary {
@@ -235,15 +252,64 @@ export interface AiReport {
   generatedAt: string;
 }
 
+/** Structured root-cause row from AI enrich v2 (mirrors API contract). */
+export interface AiRankedRootCause {
+  label: string;
+  confidenceValue?: number;
+  confidenceLabel?: string;
+  rationale: string;
+  supportingEvidenceRefs: string[];
+  caveats: string[];
+}
+
+/** Structured recommended check from AI enrich v2. */
+export interface AiRefinedCheck {
+  text: string;
+  whyItMatters: string;
+  priority: "low" | "medium" | "high";
+  linkedCandidateLabel?: string;
+}
+
+/** Explicit second-hop LLM output (BYO), anchored on primary narrative + structured payload. */
+export interface AiFollowUpArtifact {
+  style: string;
+  content: string;
+  generatedAt: string;
+}
+
 export interface AiAnalysis {
   available: boolean;
   summary?: string;
+  /** v2: primary AI summary (may mirror summary for UI) */
+  enrichedSummary?: string;
   timelineNarrative?: string;
   rootCauseCandidates: string[];
   followUpQuestions: string[];
   recommendedChecks: string[];
   reports: Partial<Record<ReportType, AiReport>>;
+  /**
+   * Additional BYO passes after primary enrichment (STAR, runbook, executive, …).
+   * Does not replace primary narrative; each entry is one explicit user-invoked style.
+   */
+  followUpArtifacts?: AiFollowUpArtifact[];
   warning?: string;
+  /** v2 enrichment: operator-focused narrative */
+  operatorNarrative?: string;
+  caveats?: string[];
+  confidenceStatement?: string;
+  rankedRootCauseCandidates?: AiRankedRootCause[];
+  refinedRecommendedChecks?: AiRefinedCheck[];
+  enrichResponseVersion?: "2.0";
+  /**
+   * When true, backend enrich has not run yet — load on demand (web: AI tab; TUI: open AI panel or press g).
+   */
+  enrichmentPending?: boolean;
+  /** True while an enrich request is in flight (for spinners / status). */
+  enrichmentLoading?: boolean;
+  /**
+   * Fixed notice when `--provider openai-compatible` is used: outbound calls and provider risk are the operator’s responsibility.
+   */
+  byoProviderNotice?: string;
 }
 
 export interface TransportDiagnostics {
@@ -261,6 +327,20 @@ export interface IncidentSchema {
   assessment: IncidentAssessment;
   signals: Signal[];
   summary: IncidentSummary;
+}
+
+/** Heuristic RCA / STAR snapshot kinds (topology + scoring + signals + enrichment on result if any). */
+export type HeuristicReportKind = "rca" | "interview";
+
+export interface HeuristicReportSnapshot {
+  kind: HeuristicReportKind;
+  markdown: string;
+  generatedAt: string;
+}
+
+export interface HeuristicReportBundle {
+  rca?: HeuristicReportSnapshot;
+  interview?: HeuristicReportSnapshot;
 }
 
 export interface AnalysisResult {
@@ -295,9 +375,21 @@ export interface AnalysisResult {
   metadata: {
     rawLineCount: number;
     createdAt: string;
+    /** Present when caller sets engine input context (e.g. live tail). */
+    analysisContext?: AnalysisContext;
   };
   /** ML enrichment (anomaly scores, clusters) when engine runs ML */
   mlEnrichment?: MlEnrichment;
+  /**
+   * Optional rolling-correlation output (e.g. live mode). When present, enrich payload includes
+   * findings, chains, and rule diagnostics from correlation.
+   */
+  correlationSnapshot?: import("../core/correlation/types.js").CorrelationResult;
+  /**
+   * RCA / STAR snapshots from the deterministic `reporting` layer (`renderReport`) — **engine only** (no `result.ai`).
+   * Filled only on explicit user action — never auto during analyze.
+   */
+  heuristicReports?: HeuristicReportBundle;
 }
 
 export type TuiPanelId =
@@ -321,5 +413,7 @@ export interface TuiState {
   focusRegion?: "main" | "side";
   message?: string;
   warnings: string[];
+  /** BYO: after `n`, next digit selects enrichment style (see ENRICHMENT_STYLES_ORDER). */
+  followUpPickerOpen?: boolean;
 }
 

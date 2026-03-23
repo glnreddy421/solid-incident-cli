@@ -1,5 +1,6 @@
 import type { AnalysisResult, TuiPanelId, TuiState } from "../contracts/index.js";
 import { PANEL_SPECS } from "./panelSpecs.js";
+import type { TuiLayoutContext } from "./layoutContext.js";
 
 export interface LayoutRender {
   topStrip: string[];
@@ -24,7 +25,13 @@ function sectionHeader(title: string): string {
   return `-- ${title} --`;
 }
 
-export function renderLayout(result: AnalysisResult, state: TuiState, isLive: boolean, liveStatus: string): LayoutRender {
+export function renderLayout(
+  result: AnalysisResult,
+  state: TuiState,
+  isLive: boolean,
+  liveStatus: string,
+  layoutCtx: TuiLayoutContext,
+): LayoutRender {
   const spec = PANEL_SPECS[state.activePanel];
   const services = `${result.assessment.serviceCount}`;
   const warnings = result.diagnostics.warnings.length;
@@ -36,14 +43,16 @@ export function renderLayout(result: AnalysisResult, state: TuiState, isLive: bo
     `Window: ${result.summary.incidentWindow.start} -> ${result.summary.incidentWindow.end} | Verdict: ${result.assessment.verdict} | Warnings: ${warnings} | Focus: ${state.focusRegion ?? "main"}`,
   ];
 
-  const main = [sectionHeader(spec.title), ...spec.main(result, state.filter, state.searchQuery)];
-  const side = [sectionHeader("Context"), ...spec.side(result, state.filter, state.searchQuery)];
+  const main = [sectionHeader(spec.title), ...spec.main(result, state.filter, state.searchQuery, layoutCtx)];
+  const side = [sectionHeader("Context"), ...spec.side(result, state.filter, state.searchQuery, layoutCtx)];
 
+  const hr = result.heuristicReports;
+  const hrTag = [hr?.rca ? "rca" : null, hr?.interview ? "star" : null].filter(Boolean).join("+") || "—";
   const footer = [
-    "1-9 panels  tab focus  / search  f filter  t trigger  s strongest  a AI explain  g AI refresh  r/c/i/T reports  e export  w save  x clear  ? help  q quit",
+    "1-9 panels  tab focus  / f  t s  a AI  g refresh  n BYO  R/I reports  e w x  ? q",
     state.message
       ? `Status: ${state.message}`
-      : `Status: Ready | logs=${result.metadata.rawLineCount} services=${result.assessment.serviceCount} signals=${result.signals.length} reports=${Object.keys(result.ai.reports).length}`,
+      : `Status: Ready | logs=${result.metadata.rawLineCount} signals=${result.signals.length} followUps=${(result.ai.followUpArtifacts ?? []).length} engineReports=${hrTag}`,
   ];
 
   return {

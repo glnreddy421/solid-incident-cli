@@ -1,4 +1,4 @@
-import type { AnalysisResult, AppMode, InputSource, AiReport } from "./model.js";
+import type { AnalysisResult, AppMode, HeuristicReportBundle, InputSource, AiReport } from "./model.js";
 
 export interface SessionRecord {
   sessionId: string;
@@ -13,6 +13,8 @@ export interface SessionRecord {
   status: "draft" | "finalized";
   warnings: string[];
   savedReports: AiReport[];
+  /** Present when user generated engine RCA / STAR before save. */
+  heuristicReports?: HeuristicReportBundle;
 }
 
 export interface SolidConfig {

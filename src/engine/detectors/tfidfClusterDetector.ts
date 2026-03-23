@@ -148,6 +148,7 @@ export function detectTfidfClusterSignals(events: ParsedIncidentEvent[]): Signal
         score: Math.min(10, 2 + indices.length),
         mlScore: 1 - indices.length / total,
         scoreSource: "tfidf",
+        supportingEventIndexes: [...indices],
       });
     }
   } catch {

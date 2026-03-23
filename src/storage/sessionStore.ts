@@ -30,6 +30,7 @@ function toSession(result: AnalysisResult, name?: string): SessionRecord {
     status: "draft",
     warnings: result.diagnostics.warnings,
     savedReports: Object.values(result.ai.reports).filter(Boolean) as SessionRecord["savedReports"],
+    heuristicReports: result.heuristicReports,
   };
 }
 

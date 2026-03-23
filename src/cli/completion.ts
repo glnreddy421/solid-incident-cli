@@ -1,6 +1,12 @@
 const CLI_NAME = "solidx";
 
-const COMMANDS = ["analyze", "session", "export", "config", "completion", "help"];
+/** BYO enrichment / --follow-up styles (bash completion after --style / --follow-up). */
+const ENRICH_STYLES = "briefing rca executive runbook star car debug questions";
+
+const REPORT_STYLES = "rca star car executive debug timeline";
+const REPORT_STATES = "final snapshot live partial";
+
+const COMMANDS = ["analyze", "enrich", "report", "session", "export", "config", "completion", "help"];
 const SESSION_SUBCOMMANDS = ["list", "show", "delete"];
 const CONFIG_SUBCOMMANDS = ["show", "set"];
 const COMPLETION_SUBCOMMANDS = ["bash", "zsh", "fish", "powershell"];
@@ -25,13 +31,30 @@ const FLAGS = [
   "--verbose",
   "--no-ai",
   "--finalize",
-  "--report",
-  "--rca",
-  "--interview-story",
   "--web",
   "--port",
   "--no-open",
   "--output",
+  "--provider",
+  "--url",
+  "--api-key",
+  "--model",
+  "--style",
+  "--timeout",
+  "--enrich-timeout",
+  "--header",
+  "--system-prompt-file",
+  "--prompt-file",
+  "--temperature",
+  "--max-tokens",
+  "--follow-up",
+  "--heuristic-rca",
+  "--heuristic-interview",
+  "--state",
+  "--no-polish",
+  "--no-confidence",
+  "--no-trust-notes",
+  "--no-suggested-fixes",
 ];
 
 function bashScript(): string {
@@ -56,6 +79,28 @@ _${CLI_NAME}() {
       COMPREPLY=($(compgen -W "${COMPLETION_SUBCOMMANDS.join(" ")}" -- "$cur"))
       return
       ;;
+    -s)
+      if [[ "\${words[1]}" == "report" ]]; then
+        COMPREPLY=($(compgen -W "${REPORT_STYLES}" -- "$cur"))
+      fi
+      return
+      ;;
+    --state)
+      COMPREPLY=($(compgen -W "${REPORT_STATES}" -- "$cur"))
+      return
+      ;;
+    --style|--follow-up)
+      if [[ "\${words[1]}" == "report" ]]; then
+        COMPREPLY=($(compgen -W "${REPORT_STYLES}" -- "$cur"))
+      else
+        COMPREPLY=($(compgen -W "${ENRICH_STYLES}" -- "$cur"))
+      fi
+      return
+      ;;
+    --detail)
+      COMPREPLY=($(compgen -W "short standard detailed" -- "$cur"))
+      return
+      ;;
     show|delete)
       if [[ "$prev" == "show" || "$prev" == "delete" ]]; then
         local sessions
@@ -68,6 +113,10 @@ _${CLI_NAME}() {
       local sessions
       sessions=$(${CLI_NAME} session list 2>/dev/null | awk '{print $1}')
       COMPREPLY=($(compgen -W "$sessions" -- "$cur"))
+      return
+      ;;
+    report)
+      COMPREPLY=($(compgen -f -- "$cur"))
       return
       ;;
   esac
@@ -123,9 +172,8 @@ _${CLI_NAME}() {
             '--session-name[name]:name' \\
             '--verbose[verbose output]' \\
             '--no-ai[disable AI]' \\
-            '--report[generate incident report]' \\
-            '--rca[generate RCA report]' \\
-            '--interview-story[generate STAR story]' \\
+            '--heuristic-rca[attach engine RCA snapshot]' \\
+            '--heuristic-interview[attach engine STAR snapshot]' \\
             '--output[output file]:file:_files'
           ;;
       esac
@@ -140,6 +188,8 @@ function fishScript(): string {
 complete -c ${CLI_NAME} -f
 
 complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "analyze" -d "Analyze logs from files/stdin"
+complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "enrich" -d "Optional AI enrichment from analysis JSON"
+complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "report" -d "Deterministic report from analysis JSON"
 complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "session" -d "Manage saved sessions"
 complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "export" -d "Export an existing session"
 complete -c ${CLI_NAME} -n "__fish_use_subcommand" -a "config" -d "View or update config"
@@ -161,11 +211,16 @@ complete -c ${CLI_NAME} -l log-level -d "Log level" -a "error warn info debug"
 complete -c ${CLI_NAME} -l save -d "Save session"
 complete -c ${CLI_NAME} -l session-name -d "Session name" -x
 complete -c ${CLI_NAME} -l verbose -d "Verbose output"
-complete -c ${CLI_NAME} -l no-ai -d "Disable AI"
-complete -c ${CLI_NAME} -l report -d "Generate incident report"
-complete -c ${CLI_NAME} -l rca -d "Generate RCA report"
-complete -c ${CLI_NAME} -l interview-story -d "Generate STAR story"
+complete -c ${CLI_NAME} -l no-ai -d "Disable BYO LLM"
+complete -c ${CLI_NAME} -l heuristic-rca -d "Engine RCA snapshot"
+complete -c ${CLI_NAME} -l heuristic-interview -d "Engine STAR snapshot"
 complete -c ${CLI_NAME} -l output -d "Output file" -r
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -s s -l style -d "Report style" -x -a "${REPORT_STYLES}"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -l state -d "Report state" -x -a "${REPORT_STATES}"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -l no-polish -d "Skip cleanup pass"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -l no-confidence -d "Omit confidence"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -l no-trust-notes -d "Omit trust notes"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from_root report" -l no-suggested-fixes -d "Omit suggested fixes"
 `;
 }
 

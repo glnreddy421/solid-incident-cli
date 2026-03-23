@@ -27,7 +27,6 @@ src/
   engine/
     analysisEngine.ts
   api/
-    backendClient.ts
   storage/
     sessionStore.ts
     configStore.ts
@@ -51,7 +50,7 @@ This structure mirrors a monorepo package intent:
 
 Priority order:
 
-1. explicit output mode flags (`--json`, `--text`, `--md`, `--html`, `--report`)
+1. explicit output mode flags (`--json`, `--text`, `--md`, `--html`)
 2. explicit non-TUI override (`--no-tui`)
 3. terminal capability auto-detection:
    - interactive TTY => TUI

@@ -1,0 +1,446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solidx.dev/schemas/incident-enrichment.v1.schema.json",
+  "title": "Incident Enrichment Payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "source",
+    "incident",
+    "rootCauseCandidates",
+    "affectedServices",
+    "signals",
+    "timeline",
+    "suggestedCauses",
+    "suggestedFixes",
+    "evidenceExcerpts",
+    "metadata"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "incident-enrichment.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "analysis-result"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "engineVersion": {
+          "type": "string"
+        },
+        "analysisMode": {
+          "type": "string"
+        }
+      }
+    },
+    "incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "healthScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "service": {
+          "type": "string"
+        },
+        "normalizedType": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "rootCauseCandidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rank",
+          "label"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "category": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "affectedServices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "relatedServices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "propagation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chain"
+      ],
+      "properties": {
+        "chain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "edgeCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "service": {
+            "type": "string"
+          },
+          "normalizedType": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "annotation": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ambiguityFlags"
+      ],
+      "properties": {
+        "overall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "parseCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "timestampCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "serviceCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "severityCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidenceDensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "ambiguityFlags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "suggestedCauses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "suggestedFixes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hasSnapshot",
+        "highlights"
+      ],
+      "properties": {
+        "hasSnapshot": {
+          "type": "boolean"
+        },
+        "highlights": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rulesMatched": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "crossSourcePropagation": {
+          "type": "boolean"
+        },
+        "errorBurstServices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidenceExcerpts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "timeline",
+              "candidate",
+              "signal",
+              "correlation"
+            ]
+          },
+          "service": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ambiguityFlags",
+        "truncation"
+      ],
+      "properties": {
+        "analysisId": {
+          "type": "string"
+        },
+        "inputLabel": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "healthScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ambiguityFlags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "truncation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timelineEntriesDropped",
+            "signalsDropped",
+            "candidatesDropped",
+            "excerptsDropped"
+          ],
+          "properties": {
+            "timelineEntriesDropped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "signalsDropped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "candidatesDropped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excerptsDropped": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}

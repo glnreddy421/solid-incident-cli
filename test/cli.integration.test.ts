@@ -22,6 +22,7 @@ describe("CLI integration", () => {
     const out = execSync(`node ${CLI_PATH} --help`, { encoding: "utf-8" });
     expect(out).toContain("solidx");
     expect(out).toContain("analyze");
+    expect(out).toContain("report");
     expect(out).toContain("session");
     expect(out).toContain("export");
   });
@@ -85,5 +86,18 @@ describe("CLI integration", () => {
     expect(parsed).toHaveProperty("timeline");
     expect(Array.isArray(parsed.timeline)).toBe(true);
     expect(parsed.timeline.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("solidx report renders deterministic RCA markdown from analyze JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "solid-report-"));
+    const jsonPath = join(dir, "analysis.json");
+    const outPath = join(dir, "rca.md");
+    const json = execSync(`node ${CLI_PATH} analyze ${SAMPLE_PATH} --json --no-ai`, { encoding: "utf-8" });
+    writeFileSync(jsonPath, json);
+    execSync(`node ${CLI_PATH} report ${jsonPath} -s rca -o ${outPath}`, { encoding: "utf-8" });
+    const md = readFileSync(outPath, "utf8");
+    expect(md).toContain("# Root cause analysis");
+    expect(md).toContain("## Incident summary");
+    expect(md).toContain("**No LLM**");
   });
 });
